@@ -14,6 +14,7 @@
 
 #define RAM_START_ADDR ((void*)0x80100000)
 #define RAM_END_ADDR ((void*)0x80400000)
+#define STEP 65536
 
 static const uint32_t banjo_data[32] = {
 	0xC908C52F, 0x00000108, 0x00000109, 0x0000010A,
@@ -38,7 +39,7 @@ int main(void)
 	// Scan for previous data on every 128-bytes boundary past the first 1MB of memory
 	printf("[ -- ] Scanning for previous data...\n");
 	uint32_t found = 0;
-	for (void* addr = RAM_START_ADDR; addr < RAM_END_ADDR; addr += 128) {
+	for (void* addr = RAM_START_ADDR; addr < RAM_END_ADDR; addr += STEP) {
 		if (*((uint32_t*)addr) == 0xC908C52F) {
 			//printf("[ OK ] FOUND magic number at address %p...\n", addr);
 			if (memcmp(addr, banjo_data, sizeof(banjo_data)) == 0) {
@@ -56,15 +57,19 @@ int main(void)
 	///////////////////////////////////////////////////////////////////////////
 
 	// Store data on every 128-bytes boundary past the first 1MB of memory
-	printf("[ -- ] Storing data...\n");
+	/*printf("[ -- ] Storing data...\n");
 	uint32_t stored = 0;
-	for (void* addr = RAM_START_ADDR; addr < RAM_END_ADDR; addr += 128) {
+	for (void* addr = RAM_START_ADDR; addr < RAM_END_ADDR; addr += STEP) {
 		memcpy((void*) addr, banjo_data, sizeof(banjo_data));
 		stored++;
 	}
-	printf("[ OK ] Done storing. Stored %ld occurrences.\n\n", stored);
+	printf("[ OK ] Done storing. Stored %ld occurrences.\n\n", stored);*/
 
 	///////////////////////////////////////////////////////////////////////////
+	
+	printf("[ -- ] Press A to store data...\n");
+	uint32_t stored = 0;
+	void* addr = RAM_START_ADDR;
 
 	console_render();
 
@@ -72,8 +77,14 @@ int main(void)
 	while (true) {
 		controller_scan();
 		struct controller_data keys = get_keys_pressed();
-		if (keys.c[0].start) {
-			printf("Start pressed.\n");
+		if (keys.c[0].A) {
+			//printf("A pressed.\n");
+			if (addr < RAM_END_ADDR) {
+				memcpy((void*) addr, banjo_data, sizeof(banjo_data));
+				stored++;
+				addr += STEP;
+			}
+			printf("[ OK ] Stored a total of %ld occurrences.\n\n", stored);
 			//break;
 		}
 	}

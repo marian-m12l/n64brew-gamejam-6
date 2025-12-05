@@ -1,0 +1,42 @@
+diff --git a/boot/ipl3.c b/boot/ipl3.c
+index 41e4d9773..c8b1d2a2b 100644
+--- a/boot/ipl3.c
++++ b/boot/ipl3.c
+@@ -196,6 +196,7 @@ static void rsp_bzero_init(bool bbplayer)
+ // since the DMA would just wrap around in IMEM.
+ void rsp_bzero_async(uint32_t rdram, int size)
+ {
++    /*
+     // Use RSP DMA which is fast, but only allows for 8-byte alignment.
+     // Data outside of the 8-byte alignment is cleared using the CPU,
+     // using uncached writes so that they behave exactly the same as RSP DMA would.
+@@ -219,6 +220,7 @@ void rsp_bzero_async(uint32_t rdram, int size)
+         size -= sz;
+         rdram += sz;
+     }
++    */
+ }
+ 
+ // Callback for rdram_init. We use this to clear the memory banks
+diff --git a/src/entrypoint.S b/src/entrypoint.S
+index 04ca89a41..973a27b63 100644
+--- a/src/entrypoint.S
++++ b/src/entrypoint.S
+@@ -22,6 +22,17 @@ _start:
+ 	li v0,SR_CU1|SR_PE|SR_FR|SR_KX|SR_SX|SR_UX
+ 	mtc0 v0,C0_SR
+ 
++	/* fill .bss with 0s */
++	la a0, __bss_start
++	or a0, 0x20000000           /* convert address to KSEG1 (uncached) */
++	la a1, __bss_end
++	or a1, 0x20000000
++.Lbss_init:
++	sd $0,(a0)
++	addiu a0,8
++	bltu a0,a1, .Lbss_init
++	nop
++
+ #if 0
+ 	/* Run a check to verify that BSS is cleared. This is useful while debugging
+ 	   IPL3 changes. */
