@@ -16,6 +16,9 @@
 #define RAM_END_ADDR ((void*)0x80400000)
 #define STEP 65536
 
+uint32_t stored = 0;
+void* last_addr = RAM_START_ADDR;
+
 static const uint32_t banjo_data[32] = {
 	0xC908C52F, 0x00000108, 0x00000109, 0x0000010A,
 	0x0000010B, 0x0000010C, 0x0000010D, 0x0000010E,
@@ -26,6 +29,25 @@ static const uint32_t banjo_data[32] = {
 	0x00000000, 0x00000000, 0x00000000, 0x00000000,
 	0x00000000, 0x00000000, 0x638AE93A, 0x22A1C3FD
 };
+
+// Callback for NMI/Reset interrupt
+static void reset_interrupt_callback(void) {
+	// There's a minimum guaranteed of 200ms (up to 500ms) before the console actually resets the game
+	// Reset does NOT happen if the player holds the reset button
+	printf("RESET handler: remove stuff from RAM ??\n");
+
+	uint32_t reset_pressed_since = exception_reset_time();	// TODO in ticks count
+
+	int i = 2;
+	while (stored > 0 && i > 0 && last_addr >= RAM_START_ADDR) {
+		memset((void*) last_addr, 0, sizeof(banjo_data));
+		printf("[ OK ] REMOVED DATA at address %p...\n", last_addr);
+		last_addr -= STEP;
+		stored--;
+		i--;
+	}
+	printf("[ OK ] Removed a total of %d occurrences.\n\n", 2 - i);
+}
 
 int main(void)
 {
@@ -38,21 +60,21 @@ int main(void)
 
 	// Scan for previous data on every 128-bytes boundary past the first 1MB of memory
 	printf("[ -- ] Scanning for previous data...\n");
-	uint32_t found = 0;
 	for (void* addr = RAM_START_ADDR; addr < RAM_END_ADDR; addr += STEP) {
 		if (*((uint32_t*)addr) == 0xC908C52F) {
 			//printf("[ OK ] FOUND magic number at address %p...\n", addr);
 			if (memcmp(addr, banjo_data, sizeof(banjo_data)) == 0) {
-				if (found < 4) {
+				stored++;
+				last_addr = addr;
+				if (stored < 5) {
 					printf("[ OK ] FOUND DATA at address %p...\n", addr);
-				} else if (found == 5) {
+				} else if (stored == 5) {
 					printf("[ OK ] ...\n");
 				}
-				found++;
 			}
 		}
 	}
-	printf("[ OK ] Done scanning. Found %ld occurrences.\n\n", found);
+	printf("[ OK ] Found %ld occurrences. Last item @ %p\n\n", stored, last_addr);
 
 	///////////////////////////////////////////////////////////////////////////
 
@@ -66,10 +88,11 @@ int main(void)
 	printf("[ OK ] Done storing. Stored %ld occurrences.\n\n", stored);*/
 
 	///////////////////////////////////////////////////////////////////////////
+
+	// Reset IRQ handler
+	register_RESET_handler(reset_interrupt_callback);
 	
 	printf("[ -- ] Press A to store data...\n");
-	uint32_t stored = 0;
-	void* addr = RAM_START_ADDR;
 
 	console_render();
 
@@ -79,13 +102,15 @@ int main(void)
 		struct controller_data keys = get_keys_pressed();
 		if (keys.c[0].A) {
 			//printf("A pressed.\n");
-			if (addr < RAM_END_ADDR) {
-				memcpy((void*) addr, banjo_data, sizeof(banjo_data));
+			if (last_addr + STEP < RAM_END_ADDR) {
+				last_addr += STEP;
+				memcpy((void*) last_addr, banjo_data, sizeof(banjo_data));
 				stored++;
-				addr += STEP;
 			}
-			printf("[ OK ] Stored a total of %ld occurrences.\n\n", stored);
+			printf("[ OK ] Stored a total of %ld occurrences.\n", stored);
 			//break;
+		} else if (keys.c[0].B) {
+			reset_interrupt_callback();
 		}
 	}
 }
