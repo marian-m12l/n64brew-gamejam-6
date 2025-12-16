@@ -7,6 +7,8 @@ src = main.c entrypoint.S
 
 #N64_CFLAGS = -Wno-error
 
+N64_LDFLAGS := -Theaps.ld $(N64_LDFLAGS)
+
 all: $(TARGET).z64
 
 $(BUILD_DIR)/$(TARGET).elf: $(src:%.c=$(BUILD_DIR)/%.o) $(src:%.S=$(BUILD_DIR)/%.o)

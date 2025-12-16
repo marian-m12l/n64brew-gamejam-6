@@ -22,9 +22,8 @@ static const uint32_t banjo_data[32] = {
 	0x00000000, 0x00000000, 0x638AE93A, 0x22A1C3FD
 };
 
-// TODO static variables in dedicated NOLOAD section instead of pointers with fixed addresses
-volatile uint32_t* reset_held = (uint32_t*) 0x80201000;
-volatile uint32_t* ms_counter = (uint32_t*) 0x80202000;
+volatile uint32_t reset_held __attribute__((section(".persistent")));
+volatile uint32_t ms_counter __attribute__((section(".persistent")));
 
 // Callback for NMI/Reset interrupt
 static void reset_interrupt_callback(void) {
@@ -32,12 +31,12 @@ static void reset_interrupt_callback(void) {
 	// Reset does NOT happen if the player holds the reset button
 	printf("RESET handler: remove stuff from RAM ??\n");
 
-	*ms_counter = 0;
+	ms_counter = 0;
 	printf("exception_reset_time() = %ld\n", exception_reset_time());
 
 	//uint32_t reset_pressed_since = exception_reset_time();	// TODO in ticks count
-	*reset_held = exception_reset_time();
-	printf("reset_held = %ld ticks\n\n", *reset_held);
+	reset_held = exception_reset_time();
+	printf("reset_held = %ld ticks\n\n", reset_held);
 
 	int i = 2;
 	while (stored > 0 && i > 0 && last_addr >= RAM_START_ADDR) {
@@ -53,13 +52,13 @@ static void reset_interrupt_callback(void) {
 	uint64_t ticks = get_ticks();
 	while (1) {
 		if (get_ticks() - ticks > (CPU_FREQUENCY/2)/1000) {
-			*ms_counter = *ms_counter + 1;
+			ms_counter++;
 			ticks = get_ticks();
-			//printf("*ms_counter = %ld ms\n\n", *ms_counter);
+			printf("ms_counter = %ld ms\n\n", ms_counter);
 		}
 
-		*reset_held = exception_reset_time();
-		//printf("reset_held = %ld ticks\n\n", *reset_held);
+		reset_held = exception_reset_time();
+		printf("reset_held = %ld ticks\n\n", reset_held);
 	}
 }
 
@@ -70,18 +69,18 @@ int main(void)
 
 	printf("Stop N Swop Test ROM\n\n");
 
-	printf("reset_held = %ld ticks / %ld ms\n\n", *reset_held, (*reset_held)/((CPU_FREQUENCY/2)/1000));
-	printf("ms_counter = %ld ms\n\n", *ms_counter);
+	printf("reset_held = %ld ticks / %ld ms\n\n", reset_held, reset_held/((CPU_FREQUENCY/2)/1000));
+	printf("ms_counter = %ld ms\n\n", ms_counter);
 
 	// Print Hello from the N64
 	strcpy(write_buf, "Hello from the N64!\r\n");
 	pc64_uart_write((const uint8_t *)write_buf, strlen(write_buf));
-	sprintf(write_buf, "ms_counter: %ld\r\n", *ms_counter);
+	sprintf(write_buf, "ms_counter: %ld\r\n", ms_counter);
 	pc64_uart_write((const uint8_t *)write_buf, strlen(write_buf));
 	printf("[ -- ] Wrote hello over UART.\n");
 
 	// Clear ms_counter so we know if the next boot is reset or cold boot
-	*ms_counter = 0;
+	ms_counter = 0;
 
 	// TODO Read cold boot / hot boot flag (from IPL) ??
 
