@@ -25,7 +25,7 @@ _start:
 	/* fill .bss with 0s */
 	la a0, __bss_start
 	or a0, 0x20000000           /* convert address to KSEG1 (uncached) */
-	la a1, __bss_end
+	la a1, __actual_bss_end
 	or a1, 0x20000000
 .Lbss_init:
 	sd $0,(a0)

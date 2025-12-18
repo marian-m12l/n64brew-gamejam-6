@@ -1,3 +1,9 @@
+/*
+Stack uses the last 64KiB of RDRAM (either 0x803f0000 or 0x807f0000)
+Malloc heap normally starts right after __bss_end --> we move it to 0x80300000 to reserve space for our own heaps
+Expansion pak RDRAM will be used for our own extra heaps, if available.
+*/
+
 PHDRS
 {
     /* We don't want to load anything in there */
@@ -10,6 +16,8 @@ SECTIONS {
     /* Make sure the ROM will fit before our persistent data */
     ASSERT(end <= 0x80100000, "ERROR: should leave all memory free starting at 1MiB offset")
 
+    __actual_bss_end = .;
+
     . = 0xa0100000;
     .persistent (NOLOAD) : {
         *(.persistent)
@@ -20,53 +28,35 @@ SECTIONS {
     ASSERT(. <= 0xa0101000, "ERROR: too much persistent data")
 
     . = 0xa0101000;
-    .rdram_1mib (NOLOAD) : {
-        *(.rdram_1mib)
+    .rdram_heap (NOLOAD) : {
+        *(.rdram_heap)
         . = ALIGN(8);
+        __rdram_heap_end = .;
     } : heaps
 
-    . = 0xa0301000;
-    .rdram_3mib (NOLOAD) : {
-        *(.rdram_3mib)
+    . = 0xa0400000;
+    .rdram_expansion_heap (NOLOAD) : {
+        *(.rdram_expansion_heap)
         . = ALIGN(8);
-    }
-
-    . = 0xa0401000;
-    .rdram_4mib (NOLOAD) : {
-        *(.rdram_4mib)
-        . = ALIGN(8);
-    }
-
-    . = 0xa0701000;
-    .rdram_7mib (NOLOAD) : {
-        *(.rdram_7mib)
-        . = ALIGN(8);
+        __rdram_expansion_heap_end = .;
     }
 
     . = 0x80101000;
-    .cached_1mib (NOLOAD) : {
-        *(.cached_1mib)
+    .cached_heap (NOLOAD) : {
+        *(.cached_heap)
         . = ALIGN(8);
+        __cached_heap_end = .;
     } : cached_heaps
 
-    . = 0x80301000;
-    .cached_3mib (NOLOAD) : {
-        *(.cached_3mib)
+    . = 0x80400000;
+    .cached_expansion_heap (NOLOAD) : {
+        *(.cached_expansion_heap)
         . = ALIGN(8);
+        __cached_expansion_heap_end = .;
     }
 
-    . = 0x80401000;
-    .cached_4mib (NOLOAD) : {
-        *(.cached_4mib)
-        . = ALIGN(8);
-    }
-
-    . = 0x80701000;
-    .cached_7mib (NOLOAD) : {
-        *(.cached_7mib)
-        . = ALIGN(8);
-    }
+    . = 0x80300000;
+    __bss_end = .;
 }
 
-/* Inserting after bss --> DO NOT USE MALLOC AS IT WILL INITIALIZE THE HEAP AT __bss_end */
 INSERT AFTER .bss;
