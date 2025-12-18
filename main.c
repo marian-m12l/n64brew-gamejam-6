@@ -4,7 +4,7 @@
 
 #include "pc64.h"
 
-#define RAM_START_ADDR ((void*)0x80100000)
+#define RAM_START_ADDR ((void*)0x80200000)
 #define RAM_END_ADDR ((void*)0x80400000)
 #define STEP 65536
 
@@ -29,19 +29,19 @@ volatile uint32_t ms_counter __attribute__((section(".persistent")));
 static void reset_interrupt_callback(void) {
 	// There's a minimum guaranteed of 200ms (up to 500ms) before the console actually resets the game
 	// Reset does NOT happen if the player holds the reset button
-	printf("RESET handler: remove stuff from RAM ??\n");
+	//printf("RESET handler: remove stuff from RAM ??\n");
 
 	ms_counter = 0;
-	printf("exception_reset_time() = %ld\n", exception_reset_time());
+	//printf("exception_reset_time() = %ld\n", exception_reset_time());
 
 	//uint32_t reset_pressed_since = exception_reset_time();	// TODO in ticks count
 	reset_held = exception_reset_time();
-	printf("reset_held = %ld ticks\n\n", reset_held);
+	//printf("reset_held = %ld ticks\n\n", reset_held);
 
 	int i = 2;
 	while (stored > 0 && i > 0 && last_addr >= RAM_START_ADDR) {
 		memset((void*) last_addr, 0, sizeof(banjo_data));
-		printf("[ OK ] REMOVED DATA at address %p...\n", last_addr);
+		//printf("[ OK ] REMOVED DATA at address %p...\n", last_addr);
 		last_addr -= STEP;
 		stored--;
 		i--;
@@ -50,15 +50,12 @@ static void reset_interrupt_callback(void) {
 
 	// Increment counter until actual reset --> measure how long the button is held
 	uint64_t ticks = get_ticks();
-	while (1) {
-		if (get_ticks() - ticks > (CPU_FREQUENCY/2)/1000) {
+	while (true) {
+		if (get_ticks() - ticks > TICKS_PER_SECOND/1000) {
 			ms_counter++;
 			ticks = get_ticks();
-			printf("ms_counter = %ld ms\n\n", ms_counter);
 		}
-
 		reset_held = exception_reset_time();
-		printf("reset_held = %ld ticks\n\n", reset_held);
 	}
 }
 
@@ -69,7 +66,10 @@ int main(void)
 
 	printf("Stop N Swop Test ROM\n\n");
 
-	printf("reset_held = %ld ticks / %ld ms\n\n", reset_held, reset_held/((CPU_FREQUENCY/2)/1000));
+	reset_type_t rst = sys_reset_type();
+	printf("Boot type: %s\n\n", rst == RESET_COLD ? "COLD" : "WARM");
+
+	printf("reset_held = %ld ticks / %ld ms\n\n", reset_held, TICKS_TO_MS(reset_held));
 	printf("ms_counter = %ld ms\n\n", ms_counter);
 
 	// Print Hello from the N64
