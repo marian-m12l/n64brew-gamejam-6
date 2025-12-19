@@ -90,6 +90,26 @@ void replicate(heap_t* heap, uint32_t id, void* data, int len, int replicas, boo
 			data_cache_hit_writeback(ptr, stored_len);
 			inst_cache_hit_invalidate(ptr, stored_len);
 		}
+        addresses[i] = ptr;
+	}
+}
+
+void update_replicas(void** addresses, void* data, int len, int replicas, bool flush) {
+    int stored_len = sizeof(uint32_t) + len + sizeof(uint16_t);
+	assert(stored_len <= CHUNK_SIZE);
+	uint16_t crc16 = calculate_crc16(data, len);
+	for (int i=0; i<replicas; i++) {
+		uint8_t* ptr = addresses[i];
+		memcpy(ptr+sizeof(uint32_t), data, len);
+		memcpy(ptr+sizeof(uint32_t)+len, &crc16, sizeof(crc16));
+		if (memcmp(ptr+sizeof(uint32_t), data, len) != 0 || memcmp(ptr+sizeof(uint32_t)+len, &crc16, sizeof(uint16_t)) != 0) {
+			debugf("Update failed\n");
+		}
+		// Optionally flush cache to RDRAM
+		if (((uintptr_t) ptr & 0x80000000) == 0x80000000 && flush) {
+			data_cache_hit_writeback(ptr, stored_len);
+			inst_cache_hit_invalidate(ptr, stored_len);
+		}
 	}
 }
 
@@ -102,7 +122,7 @@ bool contains_id(uint32_t* ids, int len, uint32_t id) {
     return false;
 }
 
-int restore(heap_t* heap, void* dest, int len, int max, uint32_t magic, uint32_t mask) {
+int restore(heap_t* heap, void* dest, int len, int stride, int max, uint32_t magic, uint32_t mask) {
     int restored = 0;
     uint32_t* ids = malloc(max * sizeof(uint32_t));
 	for (int i=0; i<heap->len; i++) {
@@ -113,10 +133,10 @@ int restore(heap_t* heap, void* dest, int len, int max, uint32_t magic, uint32_t
         if ((id & mask) == magic) {
 			uint16_t crc16 = calculate_crc16(ptr+sizeof(uint32_t), len);
 			if (memcmp(ptr+sizeof(uint32_t)+len, &crc16, 2) == 0) {
-                heap->allocated[i] = true;
+                // FIXME heap->allocated[i] = true;
                 if (!found) {
                     //debugf("<<< restored object with id 0x%08x @ %p\n", id, ptr);
-                    memcpy(dest+restored*len, ptr+sizeof(uint32_t), len);
+                    memcpy(dest+restored*stride, ptr+sizeof(uint32_t), len);
                     ids[restored] = id;
                     restored++;
                     found = true;
@@ -129,10 +149,10 @@ int restore(heap_t* heap, void* dest, int len, int max, uint32_t magic, uint32_t
         if ((id & mask) == magic) {
             uint16_t crc16 = calculate_crc16(ptr+sizeof(uint32_t), len);
             if (memcmp(ptr+sizeof(uint32_t)+len, &crc16, 2) == 0) {
-                heap->allocated[i] = true;
+                // FIXME heap->allocated[i] = true;
                 if (!found) {
                     //debugf("<<< restored object with id 0x%08x @ %p\n", id, ptr);
-                    memcpy(dest+restored*len, ptr+sizeof(uint32_t), len);
+                    memcpy(dest+restored*stride, ptr+sizeof(uint32_t), len);
                     ids[restored] = id;
                     restored++;
                     found = true;

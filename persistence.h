@@ -19,5 +19,6 @@ extern heap_t heap2;
 extern heap_t heap3;
 extern heap_t heap4;
 
-void replicate(heap_t* heap, uint32_t id, void* data, int len, int replicas, bool cached, bool flush);
-int restore(heap_t* heap, void* dest, int len, int max, uint32_t magic, uint32_t mask);
+void replicate(heap_t* heap, uint32_t id, void* data, int len, int replicas, bool cached, bool flush, void** addresses);
+void update_replicas(void** addresses, void* data, int len, int replicas, bool flush);
+int restore(heap_t* heap, void* dest, int len, int stride, int max, uint32_t magic, uint32_t mask);
