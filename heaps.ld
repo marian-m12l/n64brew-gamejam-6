@@ -34,12 +34,18 @@ SECTIONS {
         __rdram_heap_end = .;
     } : heaps
 
+    /* Make sure our heaps will fit before malloc heap */
+    ASSERT(. <= 0xa0300000, "ERROR: custom heap too large")
+
     . = 0xa0400000;
     .rdram_expansion_heap (NOLOAD) : {
         *(.rdram_expansion_heap)
         . = ALIGN(8);
         __rdram_expansion_heap_end = .;
     }
+
+    /* Make sure our extra heaps will fit before stack */
+    ASSERT(. <= 0xa07f0000, "ERROR: extra heap too large")
 
     . = 0x80101000;
     .cached_heap (NOLOAD) : {
@@ -48,12 +54,18 @@ SECTIONS {
         __cached_heap_end = .;
     } : cached_heaps
 
+    /* Make sure our heaps will fit before malloc heap */
+    ASSERT(. <= 0x80300000, "ERROR: custom heap too large")
+
     . = 0x80400000;
     .cached_expansion_heap (NOLOAD) : {
         *(.cached_expansion_heap)
         . = ALIGN(8);
         __cached_expansion_heap_end = .;
     }
+
+    /* Make sure our extra heaps will fit before stack */
+    ASSERT(. <= 0x807f0000, "ERROR: extra heap too large")
 
     . = 0x80300000;
     __bss_end = .;

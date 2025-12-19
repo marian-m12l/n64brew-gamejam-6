@@ -4,7 +4,7 @@ N64_ROM_HEADER=ipl3_dev_patched.z64
 include $(N64_INST)/include/n64.mk
 include $(T3D_INST)/t3d.mk
 
-src = main.c entrypoint.S
+src = main.c persistence.c entrypoint.S
 
 #N64_CFLAGS = -Wno-error
 
