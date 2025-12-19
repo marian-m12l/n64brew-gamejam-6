@@ -59,6 +59,9 @@ uint32_t consoles_count = 0;
 uint32_t held_ms;
 
 volatile uint32_t reset_held __attribute__((section(".persistent")));
+volatile uint32_t reset_count __attribute__((section(".persistent")));
+volatile uint32_t power_cycle_count __attribute__((section(".persistent")));
+// FIXME Counters will need heavy replication to resist long power-cycles
 
 // Callback for NMI/Reset interrupt
 /*static void reset_interrupt_callback(void) {
@@ -95,9 +98,16 @@ void setup_console(console_t* console) {
 	displayable->mat_fp = malloc_uncached(sizeof(T3DMat4FP) * FB_COUNT);	// FIXME Need to free !
 	rspq_block_begin();
 		t3d_matrix_push(displayable->mat_fp);
-		rdpq_set_prim_color(console->color);
+		//rdpq_set_prim_color(console->color);
 		//t3d_model_draw_skinned(displayable->model, &displayable->skel);
 		t3d_model_draw(displayable->model);
+		// TODO the model uses the prim. color to blend between the offscreen-texture and white-noise
+    	//uint8_t blend = (uint8_t)(noiseStrength * 255.4f);
+    	//rdpq_set_prim_color(RGBA32(blend, blend, blend, 255 - blend));
+		/* TODO render offscreen seen: on for each console? t3d_model_draw_custom(modelCRT, (T3DModelDrawConf){
+			.userData = &offscreenSurf,
+			.dynTextureCb = dynamic_tex_cb,
+		});*/
 		t3d_matrix_pop(1);
 	displayable->dpl = rspq_block_end();
 }
@@ -121,8 +131,8 @@ void update(bool in_reset) {
 	// Move models
 	for (int i=0; i<consoles_count; i++) {
 		console_t* console = &consoles[i];
-		console->rotation.y -= in_reset ? console->rot_speed * 0.1f : console->rot_speed * 0.2f;
-		console->rotation.z -= in_reset ? console->rot_speed * 5.0f : console->rot_speed;
+		console->rotation.x -= in_reset ? console->rot_speed * 1.0f : console->rot_speed * 0.2f;
+		console->rotation.y -= in_reset ? console->rot_speed * 5.0f : console->rot_speed;
 		// Need to update replicas with new values
 		update_console(console);
 	}
@@ -160,6 +170,8 @@ void render_2d() {
 
 	heap_stats_t stats;
 	sys_get_heap_stats(&stats);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 190, "       Resets : %ld", reset_count);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 200, " Power cycles : %ld", power_cycle_count);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 210, "    Heap size : %d", stats.total);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 220, "    Allocated : %d", stats.used);
 
@@ -192,7 +204,7 @@ int main(void) {
 
 	frameIdx = 0;
 
-	console_model = t3d_model_load("rom:/model.t3dm");
+	console_model = t3d_model_load("rom:/crt.t3dm");
 
 	debugf("Stop N Swop Test ROM\n");
 
@@ -212,6 +224,8 @@ int main(void) {
 			console_t* console = add_console();
 			replicate_console(console);
 		}
+		reset_count = 0;
+		power_cycle_count = 0;
 	} else {
 		// Restored at least once console: keep playing
 		for (int i=0; i<consoles_count; i++) {
@@ -224,6 +238,11 @@ int main(void) {
 			console->displayable = &console_displayables[i];
 			// Recreate replicas (alternative would be to keep replicas as-is)
 			replicate_console(console);
+		}
+		if (rst == RESET_COLD) {
+			power_cycle_count++;
+		} else {
+			reset_count++;
 		}
 	}
 
