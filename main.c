@@ -56,6 +56,7 @@ console_t consoles[MAX_CONSOLES];
 displayable_t console_displayables[MAX_CONSOLES];
 
 uint32_t consoles_count = 0;
+int current_joypad = -1;
 uint32_t held_ms;
 
 volatile uint32_t reset_held __attribute__((section(".persistent")));
@@ -141,11 +142,10 @@ void update(bool in_reset) {
 void render_3d(bool in_reset) {
 	frameIdx = (frameIdx + 1) % FB_COUNT;
 
-	rdpq_attach(display_get(), display_get_zbuf());
 	t3d_frame_start();
 	t3d_viewport_attach(&viewport);
 
-	t3d_screen_clear_color(RGBA32(100, 80, 80, 0xFF));
+	t3d_screen_clear_color(RGBA32(80, 80, 80, ff));
 	t3d_screen_clear_depth();
 
 	t3d_light_set_ambient(colorAmbient);
@@ -175,9 +175,21 @@ void render_2d() {
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 210, "    Heap size : %d", stats.total);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 220, "    Allocated : %d", stats.used);
 
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 180, "Port      : %d", current_joypad);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 190, "Joypads   : %d/%d/%d/%d", joypad_is_connected(JOYPAD_PORT_1), joypad_is_connected(JOYPAD_PORT_2), joypad_is_connected(JOYPAD_PORT_3), joypad_is_connected(JOYPAD_PORT_4));
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 200, "Consoles  : %ld", consoles_count);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 210, "Reset held: %ldms", held_ms);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 220, "FPS   : %.2f", display_get_fps());
+}
+
+void draw_bars(float height) {
+  if(height > 0) {
+	rdpq_mode_push();
+	rdpq_set_mode_fill(RGBA32(0, 0, 0, 0xff));
+	rdpq_fill_rectangle(0, 0, 320, height);
+	rdpq_fill_rectangle(0, 240 - height, 320, 240);
+	rdpq_mode_pop();
+  }
 }
 
 int main(void) {
@@ -262,19 +274,46 @@ int main(void) {
 		reset_held = exception_reset_time();
 		bool in_reset = reset_held != 0;
 		if (!in_reset) {
+			// Identify the current joypad port and make sure only one is plugged
+			int ports = 0;
+			JOYPAD_PORT_FOREACH(port) {
+				if (joypad_is_connected(port)) {
+					ports++;
+				}
+			}
+			if (ports > 1) {
+				// TODO Pause game and display message
+				//debugf("Please plug only one joypad\n");
+			} else {
+				current_joypad = -1;
+				JOYPAD_PORT_FOREACH(port) {
+					if (joypad_is_connected(port)) {
+						current_joypad = port;
+					}
+				}
+			}
+
 			joypad_poll();
-			joypad_buttons_t pressed = joypad_get_buttons_pressed(JOYPAD_PORT_1);
-			if (pressed.a && consoles_count < MAX_CONSOLES) {
-				console_t* console = add_console();
-				replicate_console(console);
-				setup_console(console);
+			if (current_joypad != -1) {
+				joypad_buttons_t pressed = joypad_get_buttons_pressed(current_joypad);
+				if (pressed.a && consoles_count < MAX_CONSOLES) {
+					console_t* console = add_console();
+					replicate_console(console);
+					setup_console(console);
+				}
 			}
 		}
 
-		update(in_reset);
-		render_3d(in_reset);
-		render_2d();
-		rdpq_detach_show();
+		//if (!in_reset || TICKS_TO_MS(reset_held) < 100) {
+			update(in_reset);
+			rdpq_attach(display_get(), display_get_zbuf());
+			render_3d(in_reset);
+			render_2d();
+			if (in_reset) {
+				draw_bars(TICKS_TO_MS(reset_held));
+			}
+			rdpq_detach_show();
+		//}
 	}
 
   	t3d_destroy();
