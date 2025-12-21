@@ -22,6 +22,21 @@ int frameIdx = 0;
 T3DModel* console_model;
 
 // TODO Game data structures
+
+// TODO Game state (intro, menu, playing)
+// TODO Current level
+// TODO Game mechanics:
+// 	- attackers gather around each console, destroying it (screen glitches, etc.)
+//	- player positions in front of a console and presses A to battle attackers
+//	- player can reset the current console (removes a lot of attackers) --> each console once?
+// 	- player can power cycle the console n times per level
+//	- goal: survive a given time? heal all consoles?
+//	- position in front of a console by plugging the (sole) controller in the corresponding port?
+//		- joypad_is_connected on every frame + use the correct port
+//		- is it ok to unplug/plug when console is running / probing?
+//		- message if too many controllers plugged (pause game)
+//		- 
+
 #define CONSOLE_MAGIC (0x11223300)
 #define CONSOLE_MASK (0xffffff00)
 
@@ -65,10 +80,10 @@ volatile uint32_t power_cycle_count __attribute__((section(".persistent")));
 // FIXME Counters will need heavy replication to resist long power-cycles
 
 // Callback for NMI/Reset interrupt
-/*static void reset_interrupt_callback(void) {
+static void reset_interrupt_callback(void) {
 	// There's a minimum guaranteed of 200ms (up to 500ms) before the console actually resets the game
 	// Reset does NOT happen if the player holds the reset button
-	reset_held = exception_reset_time();
+	//reset_held = exception_reset_time();
 
 	// TODO Destroy data in heaps ?! in persistent ram ? randomly ?
 	// TODO Visual feedback? Continue rendering and count ticks in main loop ??
@@ -77,7 +92,7 @@ volatile uint32_t power_cycle_count __attribute__((section(".persistent")));
 	while (true) {
 		reset_held = exception_reset_time();
 	}
-}*/
+}
 
 console_t* add_console() {
 	console_t* console = &consoles[consoles_count];
@@ -124,7 +139,7 @@ void update_console(console_t* console) {
 	update_replicas(console->replicas, console, CONSOLE_PAYLOAD_SIZE, CONSOLE_REPLICAS, true);
 }
 
-void update(bool in_reset) {
+void update() {
 	// TODO Move camera?
 	t3d_viewport_set_projection(&viewport, T3D_DEG_TO_RAD(85.0f), 10.0f, 150.0f);
 	t3d_viewport_look_at(&viewport, &camPos, &camTarget, &(T3DVec3){{0,1,0}});
@@ -132,14 +147,14 @@ void update(bool in_reset) {
 	// Move models
 	for (int i=0; i<consoles_count; i++) {
 		console_t* console = &consoles[i];
-		console->rotation.x -= in_reset ? console->rot_speed * 1.0f : console->rot_speed * 0.2f;
-		console->rotation.y -= in_reset ? console->rot_speed * 5.0f : console->rot_speed;
+		console->rotation.x -= console->rot_speed * 0.2f;
+		console->rotation.y -= console->rot_speed;
 		// Need to update replicas with new values
 		update_console(console);
 	}
 }
 
-void render_3d(bool in_reset) {
+void render_3d() {
 	frameIdx = (frameIdx + 1) % FB_COUNT;
 
 	t3d_frame_start();
@@ -180,16 +195,6 @@ void render_2d() {
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 200, "Consoles  : %ld", consoles_count);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 210, "Reset held: %ldms", held_ms);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 220, "FPS   : %.2f", display_get_fps());
-}
-
-void draw_bars(float height) {
-  if(height > 0) {
-	rdpq_mode_push();
-	rdpq_set_mode_fill(RGBA32(0, 0, 0, 0xff));
-	rdpq_fill_rectangle(0, 0, 320, height);
-	rdpq_fill_rectangle(0, 240 - height, 320, 240);
-	rdpq_mode_pop();
-  }
 }
 
 int main(void) {
@@ -263,57 +268,45 @@ int main(void) {
 		setup_console(&consoles[i]);
 	}
 	
-
-	
 	// Reset IRQ handler
-	//register_RESET_handler(reset_interrupt_callback);
+	register_RESET_handler(reset_interrupt_callback);
 	
+
 	while (true) {
-		// TODO check exception_reset_time() to handle reset animation (fade to black? mask to black ? make console models react ??)
-		// TODO Alternate fast loop to be able to update reset_held with exception_reset_time() and measure reset button hold time?
-		reset_held = exception_reset_time();
-		bool in_reset = reset_held != 0;
-		if (!in_reset) {
-			// Identify the current joypad port and make sure only one is plugged
-			int ports = 0;
+		// Identify the current joypad port and make sure only one is plugged
+		int ports = 0;
+		JOYPAD_PORT_FOREACH(port) {
+			if (joypad_is_connected(port)) {
+				ports++;
+			}
+		}
+		if (ports > 1) {
+			// TODO Pause game and display message
+			//debugf("Please plug only one joypad\n");
+		} else {
+			current_joypad = -1;
 			JOYPAD_PORT_FOREACH(port) {
 				if (joypad_is_connected(port)) {
-					ports++;
-				}
-			}
-			if (ports > 1) {
-				// TODO Pause game and display message
-				//debugf("Please plug only one joypad\n");
-			} else {
-				current_joypad = -1;
-				JOYPAD_PORT_FOREACH(port) {
-					if (joypad_is_connected(port)) {
-						current_joypad = port;
-					}
-				}
-			}
-
-			joypad_poll();
-			if (current_joypad != -1) {
-				joypad_buttons_t pressed = joypad_get_buttons_pressed(current_joypad);
-				if (pressed.a && consoles_count < MAX_CONSOLES) {
-					console_t* console = add_console();
-					replicate_console(console);
-					setup_console(console);
+					current_joypad = port;
 				}
 			}
 		}
 
-		//if (!in_reset || TICKS_TO_MS(reset_held) < 100) {
-			update(in_reset);
-			rdpq_attach(display_get(), display_get_zbuf());
-			render_3d(in_reset);
-			render_2d();
-			if (in_reset) {
-				draw_bars(TICKS_TO_MS(reset_held));
+		joypad_poll();
+		if (current_joypad != -1) {
+			joypad_buttons_t pressed = joypad_get_buttons_pressed(current_joypad);
+			if (pressed.a && consoles_count < MAX_CONSOLES) {
+				console_t* console = add_console();
+				replicate_console(console);
+				setup_console(console);
 			}
-			rdpq_detach_show();
-		//}
+		}
+
+		update();
+		rdpq_attach(display_get(), display_get_zbuf());
+		render_3d();
+		render_2d();
+		rdpq_detach_show();
 	}
 
   	t3d_destroy();
