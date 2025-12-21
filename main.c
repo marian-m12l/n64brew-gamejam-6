@@ -73,10 +73,13 @@ displayable_t console_displayables[MAX_CONSOLES];
 uint32_t consoles_count = 0;
 int current_joypad = -1;
 uint32_t held_ms;
+bool wrong_joypads_count = false;
+bool paused_wrong_joypads_count = false;
 
 volatile uint32_t reset_held __attribute__((section(".persistent")));
 volatile uint32_t reset_count __attribute__((section(".persistent")));
 volatile uint32_t power_cycle_count __attribute__((section(".persistent")));
+volatile bool wrong_joypads_count_displayed __attribute__((section(".persistent")));
 // FIXME Counters will need heavy replication to resist long power-cycles
 
 // Callback for NMI/Reset interrupt
@@ -195,6 +198,12 @@ void render_2d() {
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 200, "Consoles  : %ld", consoles_count);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 210, "Reset held: %ldms", held_ms);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 220, "FPS   : %.2f", display_get_fps());
+
+	if (paused_wrong_joypads_count) {
+		rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 40, 100, "Please plug a single joypad");
+	} else if (wrong_joypads_count) {
+		rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 40, 100, "NO NO, plug a single joypad");
+	}
 }
 
 int main(void) {
@@ -243,6 +252,7 @@ int main(void) {
 		}
 		reset_count = 0;
 		power_cycle_count = 0;
+		wrong_joypads_count_displayed = false;
 	} else {
 		// Restored at least once console: keep playing
 		for (int i=0; i<consoles_count; i++) {
@@ -272,6 +282,7 @@ int main(void) {
 	register_RESET_handler(reset_interrupt_callback);
 	
 
+	update();
 	while (true) {
 		// Identify the current joypad port and make sure only one is plugged
 		int ports = 0;
@@ -280,10 +291,17 @@ int main(void) {
 				ports++;
 			}
 		}
-		if (ports > 1) {
+		wrong_joypads_count = ports > 1;
+		if (wrong_joypads_count) {
+			current_joypad = -1;
 			// TODO Pause game and display message
 			//debugf("Please plug only one joypad\n");
+			if (!wrong_joypads_count_displayed) {
+				paused_wrong_joypads_count = true;
+				wrong_joypads_count_displayed = true;
+			}
 		} else {
+			paused_wrong_joypads_count = false;
 			current_joypad = -1;
 			JOYPAD_PORT_FOREACH(port) {
 				if (joypad_is_connected(port)) {
@@ -293,16 +311,19 @@ int main(void) {
 		}
 
 		joypad_poll();
-		if (current_joypad != -1) {
-			joypad_buttons_t pressed = joypad_get_buttons_pressed(current_joypad);
-			if (pressed.a && consoles_count < MAX_CONSOLES) {
-				console_t* console = add_console();
-				replicate_console(console);
-				setup_console(console);
+		if (!paused_wrong_joypads_count) {
+			if (current_joypad != -1) {
+				joypad_buttons_t pressed = joypad_get_buttons_pressed(current_joypad);
+				if (pressed.a && consoles_count < MAX_CONSOLES) {
+					console_t* console = add_console();
+					replicate_console(console);
+					setup_console(console);
+				}
 			}
+
+			update();
 		}
 
-		update();
 		rdpq_attach(display_get(), display_get_zbuf());
 		render_3d();
 		render_2d();
