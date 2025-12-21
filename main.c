@@ -145,7 +145,7 @@ void render_3d(bool in_reset) {
 	t3d_frame_start();
 	t3d_viewport_attach(&viewport);
 
-	t3d_screen_clear_color(RGBA32(80, 80, 80, ff));
+	t3d_screen_clear_color(RGBA32(80, 80, 80, 255));
 	t3d_screen_clear_depth();
 
 	t3d_light_set_ambient(colorAmbient);
