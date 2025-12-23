@@ -1,5 +1,12 @@
+diff --git a/boot/bin/ipl3_dev.z64 b/boot/bin/ipl3_dev.z64
+index 9c015f553..2fe205157 100755
+Binary files a/boot/bin/ipl3_dev.z64 and b/boot/bin/ipl3_dev.z64 differ
+diff --git a/boot/bin/ipl3_prod.z64 b/boot/bin/ipl3_prod.z64
+deleted file mode 100755
+index 48eeb3bb2..000000000
+Binary files a/boot/bin/ipl3_prod.z64 and /dev/null differ
 diff --git a/boot/ipl3.c b/boot/ipl3.c
-index 41e4d9773..c8b1d2a2b 100644
+index 41e4d9773..0bae79b4e 100644
 --- a/boot/ipl3.c
 +++ b/boot/ipl3.c
 @@ -196,6 +196,7 @@ static void rsp_bzero_init(bool bbplayer)
@@ -18,6 +25,15 @@ index 41e4d9773..c8b1d2a2b 100644
  }
  
  // Callback for rdram_init. We use this to clear the memory banks
+@@ -268,7 +270,7 @@ void stage1(void)
+     entropy_add(C0_COUNT());
+     entropy_add(*DP_CLOCK);    
+     C0_WRITE_CAUSE(0);
+-    C0_WRITE_COUNT(0);
++    //C0_WRITE_COUNT(0);
+     C0_WRITE_COMPARE(0);
+ 	C0_WRITE_WATCHLO(0);
+ 
 diff --git a/src/entrypoint.S b/src/entrypoint.S
 index 04ca89a41..973a27b63 100644
 --- a/src/entrypoint.S

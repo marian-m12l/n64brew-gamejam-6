@@ -55,6 +55,8 @@ T3DViewport viewportOffscreen;
 //	- Select current console with D-Pad
 // TODO Need to clear/invalidate replicas when deleting an actor !!
 
+// TODO on reset, animate screen bars ON THE SELECTED CONSOLE --> add bars on the OFFSCREEN surface + remove noise !
+
 
 typedef enum {
 	INTRO = 0,
@@ -141,6 +143,9 @@ static void reset_interrupt_callback(void) {
 		// TODO Apply effect to selected console
 		level_reset_count_per_console[current_joypad]++;
 	}
+
+	// FIXME ticks are zeroe'd when resetting the console ??
+	reset_held = TICKS_READ();
 
 	// Measure how long the reset button is held
 	/*while (true) {
@@ -487,7 +492,7 @@ int main(void) {
 	reset_type_t rst = sys_reset_type();
 	// TODO Treat separately cold, lukewarm (cold with remaining data in ram), and warm boots
 	debugf("Boot type: %s\n", rst == RESET_COLD ? "COLD" : "WARM");
-	held_ms = (rst == RESET_COLD) ? 0 : TICKS_TO_MS(reset_held);
+	held_ms = (rst == RESET_COLD) ? 0 : TICKS_TO_MS(TICKS_SINCE(reset_held));
 	debugf("held_ms = %ld\n", held_ms);
 	
 	// Restore game data from heap replicas
