@@ -13,7 +13,7 @@
 #define FB_COUNT 3
 
 T3DViewport viewport;
-T3DVec3 camPos = {{0,10.0f,40.0f}};
+T3DVec3 camPos = {{ 0.0f, 0.0f, 40.0f }};
 T3DVec3 camTarget = {{0,0,0}};
 uint8_t colorAmbient[4] = {80, 80, 100, 0xFF};
 uint8_t colorDir[4]     = {0xEE, 0xAA, 0xAA, 0xFF};
@@ -21,6 +21,13 @@ T3DVec3 lightDirVec = {{-1.0f, 1.0f, 1.0f}};
 int frameIdx = 0;
 
 T3DModel* console_model;
+
+
+#define OFFSCREEN_SIZE 80
+
+surface_t offscreenSurf;
+surface_t offscreenSurfZ;
+T3DViewport viewportOffscreen;
 
 // TODO Game data structures
 
@@ -56,7 +63,7 @@ typedef enum {
 	FINISHED
 } game_state_t;
 
-#define TOTAL_LEVELS (3)
+#define TOTAL_LEVELS (4)
 
 typedef struct {
 	uint8_t consoles_count;
@@ -68,7 +75,8 @@ typedef struct {
 level_t levels[TOTAL_LEVELS] = {
 	{ 1, 1, 2, 2 },
 	{ 2, 3, 2, 1 },
-	{ 3, 4, 1, 1 }
+	{ 3, 4, 1, 1 },
+	{ 4, 5, 1, 1 }
 };
 
 #define CONSOLE_MAGIC (0x11223300)
@@ -135,9 +143,30 @@ static void reset_interrupt_callback(void) {
 	}
 
 	// Measure how long the reset button is held
-	while (true) {
+	/*while (true) {
 		reset_held = exception_reset_time();
-	}
+	}*/
+}
+
+// This is a callback for t3d_model_draw_custom, it is used when a texture in a model is set to dynamic/"reference"
+void dynamic_tex_cb(void* userData, const T3DMaterial* material, rdpq_texparms_t *tileParams, rdpq_tile_t tile) {
+  if(tile != TILE0)return; // this callback can happen 2 times per mesh, you are allowed to skip calls
+
+  surface_t *offscreenSurf = (surface_t*)userData;
+  rdpq_sync_tile();
+
+  int sHalf = OFFSCREEN_SIZE / 2;
+  int sFull = OFFSCREEN_SIZE;
+
+  // upload a slice of the offscreen-buffer, the screen in the TV model is split into 4 materials for each section
+  // if you are working with a small enough single texture, you can ofc use a normal sprite upload.
+  // the quadrant is determined by the texture reference set in fast64, which can be used as an arbitrary value
+  switch(material->textureA.texReference) { // Note: TILE1 is used here due to CC shenanigans
+    case 1: rdpq_tex_upload_sub(TILE1, offscreenSurf, NULL,  0,     0,     sHalf, sHalf); break;
+    case 2: rdpq_tex_upload_sub(TILE1, offscreenSurf, NULL,  sHalf, 0,     sFull, sHalf); break;
+    case 3: rdpq_tex_upload_sub(TILE1, offscreenSurf, NULL,  0,     sHalf, sHalf, sFull); break;
+    case 4: rdpq_tex_upload_sub(TILE1, offscreenSurf, NULL,  sHalf, sHalf, sFull, sFull); break;
+  }
 }
 
 console_t* add_console() {
@@ -148,7 +177,7 @@ console_t* add_console() {
 	console->rotation = (T3DVec3){{ 0.0f, 0.0f, 0.0f }};
 	console->position = (T3DVec3){{ -45.0f + 10.f * consoles_count, 30.0f - (rand() % 60), 0.0f }};
 	console->rot_speed = (5.0f - (rand() % 10)) * 0.02f;
-	console->color = RGBA32(rand() % 255, rand() % 255, rand() % 255, 255);
+	console->color = RGBA32(255, 255, 255, 255);
 	console->displayable = &console_displayables[consoles_count];
 	consoles_count++;
 	return console;
@@ -162,14 +191,16 @@ void setup_console(console_t* console) {
 		t3d_matrix_push(displayable->mat_fp);
 		//rdpq_set_prim_color(console->color);
 		//t3d_model_draw_skinned(displayable->model, &displayable->skel);
-		t3d_model_draw(displayable->model);
+		//t3d_model_draw(displayable->model);
 		// TODO the model uses the prim. color to blend between the offscreen-texture and white-noise
-    	//uint8_t blend = (uint8_t)(noiseStrength * 255.4f);
-    	//rdpq_set_prim_color(RGBA32(blend, blend, blend, 255 - blend));
-		/* TODO render offscreen seen: on for each console? t3d_model_draw_custom(modelCRT, (T3DModelDrawConf){
+		float noiseStrength = 0.5f;
+    	uint8_t blend = (uint8_t)(noiseStrength * 255.4f);
+    	rdpq_set_prim_color(RGBA32(blend, blend, blend, 255 - blend));
+		/* TODO render offscreen seen: on for each console? */
+		t3d_model_draw_custom(displayable->model, (T3DModelDrawConf){
 			.userData = &offscreenSurf,
 			.dynTextureCb = dynamic_tex_cb,
-		});*/
+		});
 		t3d_matrix_pop(1);
 	displayable->dpl = rspq_block_end();
 }
@@ -194,6 +225,65 @@ void load_level() {
 		console_t* console = add_console();
 		replicate_console(console);
 		setup_console(&consoles[i]);
+		// Position consoles
+		float scale = 0.18f * powf(0.7f, level->consoles_count);
+		float x_offset = 20.0f;
+		float y_offset = 15.0f;
+		console->scale = (T3DVec3){{ scale, scale, scale }};
+		console->rotation = (T3DVec3){{ 0.0f, 0.0f, 0.0f }};
+		console->rot_speed = 0.0f;
+		switch (i) {
+			case 0: {
+				switch (level->consoles_count) {
+					case 1:
+						console->position = (T3DVec3){{ 0.0f, 0.0f, 0.0f }};
+						break;
+					case 2:
+						console->position = (T3DVec3){{ -1.0f * x_offset, 0.0f, 0.0f }};
+						break;
+					case 3:
+						console->position = (T3DVec3){{ -1.0f * x_offset, 1.0f * y_offset, 0.0f }};
+						break;
+					case 4:
+						console->position = (T3DVec3){{ -1.0f * x_offset, -1.0f * y_offset, 0.0f }};
+						break;
+				}
+				break;
+			}
+			case 1: {
+				switch (level->consoles_count) {
+					case 2:
+						console->position = (T3DVec3){{ 1.0f * x_offset, 0.0f, 0.0f }};
+						break;
+					case 3:
+						console->position = (T3DVec3){{ 0.0f, -1.0f * y_offset, 0.0f }};
+						break;
+					case 4:
+						console->position = (T3DVec3){{ 1.0f * x_offset, -1.0f * y_offset, 0.0f }};
+						break;
+				}
+				break;
+			}
+			case 2: {
+				switch (level->consoles_count) {
+					case 3:
+						console->position = (T3DVec3){{ 1.0f * x_offset, 1.0f * y_offset, 0.0f }};
+						break;
+					case 4:
+						console->position = (T3DVec3){{ -1.0f * x_offset, 1.0f * y_offset, 0.0f }};
+						break;
+				}
+				break;
+			}
+			case 3: {
+				switch (level->consoles_count) {
+					case 4:
+						console->position = (T3DVec3){{ 1.0f * x_offset, 1.0f * y_offset, 0.0f }};
+						break;
+				}
+				break;
+			}
+		}
 	}
 
 	for (int i=0; i<MAX_CONSOLES; i++) {
@@ -205,8 +295,9 @@ void load_level() {
 void clear_level() {
 	debugf("Clearing level %d\n", current_level);
 	level_t* level = &levels[current_level];
-	debugf("Erasing %d consoles\n", level->consoles_count);
-	for (int i=0; i<level->consoles_count; i++) {
+	debugf("Erasing %d/%d consoles\n", consoles_count, level->consoles_count);
+	int count = consoles_count;	// FIXME We may have lost consoles during a reset !!
+	for (int i=0; i<count; i++) {
 		console_t* console = &consoles[i];
 		erase_and_free_replicas(&heap1, console->replicas, CONSOLE_REPLICAS);
 		displayable_t* displayable = console->displayable;
@@ -321,7 +412,7 @@ void render_3d() {
 					console->rotation.v,
 					console->position.v
 				);
-				rdpq_set_prim_color(console->color);
+				// FIXME ??? rdpq_set_prim_color(console->color);
 				rspq_block_run(console->displayable->dpl);
 			}
 			break;
@@ -413,6 +504,8 @@ int main(void) {
 		current_level = 0;
 		game_state = INTRO;
 	} else {
+		// TODO Make sure enough data was recovered: current_level, game_state, ... --> REPLICAS + RESTORE !!
+
 		// Restored at least once console: keep playing
 		for (int i=0; i<consoles_count; i++) {
 			console_t* console = &consoles[i];
@@ -438,6 +531,9 @@ int main(void) {
 	}
 	
 	display_init(RESOLUTION_320x240, DEPTH_16_BPP, FB_COUNT, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS);
+	
+	offscreenSurf = surface_alloc(FMT_RGBA16, OFFSCREEN_SIZE, OFFSCREEN_SIZE);
+	offscreenSurfZ = surface_alloc(FMT_RGBA16, OFFSCREEN_SIZE, OFFSCREEN_SIZE);
 
 	t3d_init((T3DInitParams){});
 	viewport = t3d_viewport_create_buffered(FB_COUNT);
@@ -448,6 +544,22 @@ int main(void) {
 	frameIdx = 0;
 
 	console_model = t3d_model_load("rom:/crt.t3dm");
+
+	viewportOffscreen = t3d_viewport_create_buffered(FB_COUNT);
+  	t3d_viewport_set_area(&viewportOffscreen, 0, 0, OFFSCREEN_SIZE, OFFSCREEN_SIZE);
+
+	T3DModel *brew = t3d_model_load("rom:/brew_logo.t3dm");
+	
+	rspq_block_begin();
+	t3d_model_draw(brew);
+	rspq_block_t *dplBrew = rspq_block_end();
+
+    T3DVec3 offscreenCamPos = {{0, 0.0f, 50.0f}};
+    T3DVec3 offscreenCamTarget = {{0, 0.0f, 0}};
+    uint8_t colorAmbient[4] = {0xff, 0xff, 0xff, 0xFF};
+    float scale = 0.08f;
+
+    T3DMat4FP *mtx = malloc_uncached(sizeof(T3DMat4FP));
 
 	// Happens only on reset
 	// Load model for each console
@@ -468,7 +580,7 @@ int main(void) {
 			}
 		}
 		wrong_joypads_count = ports > 1;
-		if (wrong_joypads_count) {
+		/*if (wrong_joypads_count) {
 			current_joypad = -1;
 			// TODO Pause game and display message
 			//debugf("Please plug only one joypad\n");
@@ -476,20 +588,53 @@ int main(void) {
 				paused_wrong_joypads_count = true;
 				wrong_joypads_count_displayed = true;
 			}
-		} else {
+		} else {*/
 			paused_wrong_joypads_count = false;
 			current_joypad = -1;
 			JOYPAD_PORT_FOREACH(port) {
-				if (joypad_is_connected(port)) {
+				if (current_joypad == -1 && joypad_is_connected(port)) {
 					current_joypad = port;
 				}
 			}
-		}
+		//}
 
 		joypad_poll();
 		if (!paused_wrong_joypads_count) {
 			update();
 		}
+
+		// ======== Draw (Offscreen) ======== //
+    	// Render the offscreen-scene first, for that we attach the extra buffer instead of the screen one
+		rdpq_attach_clear(&offscreenSurf, &offscreenSurfZ);
+		t3d_frame_start();
+		t3d_viewport_attach(&viewportOffscreen);
+
+		/*t3d_light_set_ambient((uint8_t[4]){0xFF, 0xFF, 0xFF, 0xFF});
+		t3d_light_set_count(0);*/
+
+		/*t3d_matrix_push(&matrixBox[frameIdx]);
+		rspq_block_run(dplBox);
+		t3d_matrix_pop(1);*/
+
+		t3d_viewport_set_projection(&viewportOffscreen, T3D_DEG_TO_RAD(85.0f), 20.0f, 160.0f);
+		t3d_viewport_look_at(&viewportOffscreen, &offscreenCamPos, &offscreenCamTarget, &(T3DVec3){{0,1,0}});
+		t3d_viewport_attach(&viewportOffscreen);
+		t3d_light_set_ambient(colorAmbient);
+		t3d_light_set_count(0);
+		
+		//if (sync) rspq_syncpoint_wait(sync);
+		t3d_mat4fp_from_srt_euler(mtx,
+			(float[3]){scale, scale, scale},
+			(float[3]){0.0f, 0, 0},
+			(float[3]){0, 0, 0}
+		);
+		t3d_matrix_push(mtx);
+		t3d_model_draw(brew);
+		t3d_matrix_pop(1);
+		//sync = rspq_syncpoint_new();
+		//rdpq_sync_pipe();
+
+		rdpq_detach();
 
 		rdpq_attach(display_get(), display_get_zbuf());
 		render_3d();
@@ -497,7 +642,16 @@ int main(void) {
 		rdpq_detach_show();
 	}
 
+	// TODO 
+	//rdpq_text_unregister_font(FONT_BILLBOARD);
+    //rdpq_font_free(fontbill);
+	//t3d_model_free(model);
+
   	t3d_destroy();
+
+	surface_free(&offscreenSurf);
+	surface_free(&offscreenSurfZ);
+
 	display_close();
 	return 0;
 }
