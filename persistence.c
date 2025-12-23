@@ -71,7 +71,8 @@ static uint16_t calculate_crc16(const uint8_t * data, size_t len) {
     return crc;
 }
 
-void replicate(heap_t* heap, uint32_t id, void* data, int len, int replicas, bool cached, bool flush) {
+// TODO Distribute replicas more evenly ? Over multiple heaps ?
+void replicate(heap_t* heap, uint32_t id, void* data, int len, int replicas, bool cached, bool flush, void** addresses) {
     int stored_len = sizeof(uint32_t) + len + sizeof(uint16_t);
 	assert(stored_len <= CHUNK_SIZE);
 	uint16_t crc16 = calculate_crc16(data, len);
@@ -110,6 +111,19 @@ void update_replicas(void** addresses, void* data, int len, int replicas, bool f
 			data_cache_hit_writeback(ptr, stored_len);
 			inst_cache_hit_invalidate(ptr, stored_len);
 		}
+	}
+}
+
+void erase_and_free_replicas(heap_t* heap, void** addresses, int replicas) {
+    for (int i=0; i<replicas; i++) {
+		uint8_t* ptr = addresses[i];
+		memset(ptr, 0, CHUNK_SIZE);
+		// Flush cache to RDRAM
+		if (((uintptr_t) ptr & 0x80000000) == 0x80000000) {
+			data_cache_hit_writeback(ptr, CHUNK_SIZE);
+			inst_cache_hit_invalidate(ptr, CHUNK_SIZE);
+		}
+		free_heap(heap, ptr);
 	}
 }
 
@@ -160,6 +174,7 @@ int restore(heap_t* heap, void* dest, int len, int stride, int max, uint32_t mag
             }
         }
 	}
+    // TODO Need to keep references to valid replicas in the struct itself ?
 	debugf("Found %d instances\n", restored);
     free(ids);
 	return restored;

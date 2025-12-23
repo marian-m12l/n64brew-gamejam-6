@@ -5,6 +5,7 @@
 #include <t3d/t3dmath.h>
 #include <t3d/t3dmodel.h>
 
+#include "logo.h"
 #include "pc64.h"
 #include "persistence.h"
 
@@ -27,20 +28,53 @@ T3DModel* console_model;
 // TODO Current level
 // TODO Game mechanics:
 // 	- attackers gather around each console, destroying it (screen glitches, etc.)
-//	- player positions in front of a console and presses A to battle attackers
-//	- player can reset the current console (removes a lot of attackers) --> each console once?
-// 	- player can power cycle the console n times per level
+//	- player positions in front of a console and presses A-A-A-... to battle attackers
+//	- player can reset the current console (removes a lot of attackers) --> each console once? good timing (gauge, visual hint color/size/movement, ...) ??
+// 	- player can power cycle the console <n> times per level max. malus system (stuck console, unusable during <n> seconds) ??
 //	- goal: survive a given time? heal all consoles?
 //	- position in front of a console by plugging the (sole) controller in the corresponding port?
 //		- joypad_is_connected on every frame + use the correct port
 //		- is it ok to unplug/plug when console is running / probing?
 //		- message if too many controllers plugged (pause game)
 //		- 
+// TODO Sign IPL3 ??
+// TODO High persistence:
+//	- Variables in .persistent
+// 	- Count for each actor ? --> to know how much was lost during power off ??
+//	- Spread across multiple heaps
+//	- Target high persistence areas (0x80400000, ...)
+// TODO Dev mode (L+R+Z):
+//	- Force memory decay manually ?
+//	- Select current console with D-Pad
+// TODO Need to clear/invalidate replicas when deleting an actor !!
+
+
+typedef enum {
+	INTRO = 0,
+	IN_GAME,
+	LEVEL_CLEARED,
+	FINISHED
+} game_state_t;
+
+#define TOTAL_LEVELS (3)
+
+typedef struct {
+	uint8_t consoles_count;
+	uint8_t attack_rate;
+	uint8_t max_resets_per_console;
+	uint8_t max_power_cycles;
+} level_t;
+
+level_t levels[TOTAL_LEVELS] = {
+	{ 1, 1, 2, 2 },
+	{ 2, 3, 2, 1 },
+	{ 3, 4, 1, 1 }
+};
 
 #define CONSOLE_MAGIC (0x11223300)
 #define CONSOLE_MASK (0xffffff00)
 
-#define MAX_CONSOLES (10)
+#define MAX_CONSOLES (4)
 #define CONSOLE_REPLICAS (4)
 
 // Struct to hold runtime stuff (model, display list, ...)
@@ -80,6 +114,10 @@ volatile uint32_t reset_held __attribute__((section(".persistent")));
 volatile uint32_t reset_count __attribute__((section(".persistent")));
 volatile uint32_t power_cycle_count __attribute__((section(".persistent")));
 volatile bool wrong_joypads_count_displayed __attribute__((section(".persistent")));
+volatile game_state_t game_state __attribute__((section(".persistent")));
+volatile uint8_t current_level __attribute__((section(".persistent")));
+volatile uint8_t level_reset_count_per_console[MAX_CONSOLES] __attribute__((section(".persistent")));
+volatile uint8_t level_power_cycle_count __attribute__((section(".persistent")));
 // FIXME Counters will need heavy replication to resist long power-cycles
 
 // Callback for NMI/Reset interrupt
@@ -90,6 +128,11 @@ static void reset_interrupt_callback(void) {
 
 	// TODO Destroy data in heaps ?! in persistent ram ? randomly ?
 	// TODO Visual feedback? Continue rendering and count ticks in main loop ??
+
+	if (current_joypad != -1) {
+		// TODO Apply effect to selected console
+		level_reset_count_per_console[current_joypad]++;
+	}
 
 	// Measure how long the reset button is held
 	while (true) {
@@ -142,18 +185,114 @@ void update_console(console_t* console) {
 	update_replicas(console->replicas, console, CONSOLE_PAYLOAD_SIZE, CONSOLE_REPLICAS, true);
 }
 
+void load_level() {
+	debugf("Loading level %d\n", current_level);
+	level_t* level = &levels[current_level];
+
+	debugf("Initializing %d consoles\n", level->consoles_count);
+	for (int i=0; i<level->consoles_count; i++) {
+		console_t* console = add_console();
+		replicate_console(console);
+		setup_console(&consoles[i]);
+	}
+
+	for (int i=0; i<MAX_CONSOLES; i++) {
+		level_reset_count_per_console[i] = 0;
+	}
+	level_power_cycle_count = 0;
+}
+
+void clear_level() {
+	debugf("Clearing level %d\n", current_level);
+	level_t* level = &levels[current_level];
+	debugf("Erasing %d consoles\n", level->consoles_count);
+	for (int i=0; i<level->consoles_count; i++) {
+		console_t* console = &consoles[i];
+		erase_and_free_replicas(&heap1, console->replicas, CONSOLE_REPLICAS);
+		displayable_t* displayable = console->displayable;
+		free_uncached(displayable->mat_fp);
+		rspq_block_free(displayable->dpl);
+		memset(displayable, 0, sizeof(displayable_t));
+		memset(console, 0, sizeof(console_t));
+		consoles_count--;
+	}
+}
+
 void update() {
 	// TODO Move camera?
 	t3d_viewport_set_projection(&viewport, T3D_DEG_TO_RAD(85.0f), 10.0f, 150.0f);
 	t3d_viewport_look_at(&viewport, &camPos, &camTarget, &(T3DVec3){{0,1,0}});
 
-	// Move models
-	for (int i=0; i<consoles_count; i++) {
-		console_t* console = &consoles[i];
-		console->rotation.x -= console->rot_speed * 0.2f;
-		console->rotation.y -= console->rot_speed;
-		// Need to update replicas with new values
-		update_console(console);
+	switch (game_state) {
+		case INTRO: {
+			if (current_joypad != -1) {
+				joypad_buttons_t pressed = joypad_get_buttons_pressed(current_joypad);
+				if (pressed.a || pressed.start) {
+					// Load level 1
+					load_level();
+					game_state = IN_GAME;
+				}
+			}
+			break;
+		}
+		case IN_GAME: {
+			// Move models
+			for (int i=0; i<consoles_count; i++) {
+				console_t* console = &consoles[i];
+				console->rotation.x -= console->rot_speed * 0.2f;
+				console->rotation.y -= console->rot_speed;
+				// Need to update replicas with new values
+				update_console(console);
+			}
+
+			bool cleared = false;
+
+			// Handle inputs
+			if (current_joypad != -1) {
+				joypad_buttons_t pressed = joypad_get_buttons_pressed(current_joypad);
+				if (pressed.a) {
+					// TODO Heal current console
+				}
+				if (pressed.start) {
+					// FIXME remove
+					cleared = true;
+				}
+			}
+
+			// TODO Handle end condition and change level
+			if (cleared) {
+				game_state = LEVEL_CLEARED;
+			}
+			break;
+		}
+		case LEVEL_CLEARED: {
+			if (current_joypad != -1) {
+				joypad_buttons_t pressed = joypad_get_buttons_pressed(current_joypad);
+				if (pressed.a || pressed.start) {
+					// Load next level
+					clear_level();
+					current_level++;
+					if (current_level < TOTAL_LEVELS) {
+						load_level();
+						game_state = IN_GAME;
+					} else {
+						game_state = FINISHED;
+					}
+				}
+			}
+			break;
+		}
+		case FINISHED: {
+			if (current_joypad != -1) {
+				joypad_buttons_t pressed = joypad_get_buttons_pressed(current_joypad);
+				if (pressed.start) {
+					// TODO Reinitialize game data
+					current_level = 0;
+					game_state = INTRO;
+				}
+			}
+			break;
+		}
 	}
 }
 
@@ -170,16 +309,27 @@ void render_3d() {
 	t3d_light_set_directional(0, colorDir, &lightDirVec);
 	t3d_light_set_count(1);
 
-	for (int i=0; i<consoles_count; i++) {
-		console_t* console = &consoles[i];
-		t3d_mat4fp_from_srt_euler(
-			&console->displayable->mat_fp[frameIdx],
-			console->scale.v,
-			console->rotation.v,
-			console->position.v
-		);
-		rdpq_set_prim_color(console->color);
-		rspq_block_run(console->displayable->dpl);
+	switch (game_state) {
+		case INTRO:
+			break;
+		case IN_GAME: {
+			for (int i=0; i<consoles_count; i++) {
+				console_t* console = &consoles[i];
+				t3d_mat4fp_from_srt_euler(
+					&console->displayable->mat_fp[frameIdx],
+					console->scale.v,
+					console->rotation.v,
+					console->position.v
+				);
+				rdpq_set_prim_color(console->color);
+				rspq_block_run(console->displayable->dpl);
+			}
+			break;
+		}
+		case LEVEL_CLEARED:
+			break;
+		case FINISHED:
+			break;
 	}
 }
 
@@ -188,21 +338,37 @@ void render_2d() {
 
 	heap_stats_t stats;
 	sys_get_heap_stats(&stats);
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 190, "       Resets : %ld", reset_count);
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 200, " Power cycles : %ld", power_cycle_count);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 190, "       Resets : %ld/%d-%d-%d-%d", reset_count, level_reset_count_per_console[0], level_reset_count_per_console[1], level_reset_count_per_console[2], level_reset_count_per_console[3]);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 200, " Power cycles : %ld/%d", power_cycle_count, level_power_cycle_count);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 210, "    Heap size : %d", stats.total);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 220, "    Allocated : %d", stats.used);
 
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 160, "State     : %d", game_state);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 170, "Level     : %d", current_level);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 180, "Port      : %d", current_joypad);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 190, "Joypads   : %d/%d/%d/%d", joypad_is_connected(JOYPAD_PORT_1), joypad_is_connected(JOYPAD_PORT_2), joypad_is_connected(JOYPAD_PORT_3), joypad_is_connected(JOYPAD_PORT_4));
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 200, "Consoles  : %ld", consoles_count);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 210, "Reset held: %ldms", held_ms);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 220, "FPS   : %.2f", display_get_fps());
 
-	if (paused_wrong_joypads_count) {
-		rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 40, 100, "Please plug a single joypad");
-	} else if (wrong_joypads_count) {
-		rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 40, 100, "NO NO, plug a single joypad");
+	switch (game_state) {
+		case INTRO:
+			rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 40, 100, "Bla bla bla... explain game");
+			break;
+		case IN_GAME: {
+			if (paused_wrong_joypads_count) {
+				rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 40, 100, "Please plug a single joypad");
+			} else if (wrong_joypads_count) {
+				rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 40, 100, "NO NO, plug a single joypad");
+			}
+			break;
+		}
+		case LEVEL_CLEARED:
+			rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 40, 100, "Congrats !!");
+			break;
+		case FINISHED:
+			rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 40, 100, "FINISHED !!");
+			break;
 	}
 }
 
@@ -210,10 +376,13 @@ int main(void) {
 	debug_init_isviewer();
 	debug_init_usblog();
 	asset_init_compression(2);
+    wav64_init_compression(3);
 	dfs_init(DFS_DEFAULT_LOCATION);
-	display_init(RESOLUTION_320x240, DEPTH_16_BPP, FB_COUNT, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS);
 	rdpq_init();
 	joypad_init();
+    timer_init();
+    audio_init(32000, 3);
+    mixer_init(32);
 
     // Initialize the random number generator, then call rand() every
     // frame so to get random behavior also in emulators.
@@ -221,16 +390,6 @@ int main(void) {
     getentropy(&seed, sizeof(seed));
     srand(seed);
     register_VI_handler((void(*)(void))rand);
-
-	t3d_init((T3DInitParams){});
-	viewport = t3d_viewport_create_buffered(FB_COUNT);
-  	rdpq_text_register_font(FONT_BUILTIN_DEBUG_MONO, rdpq_font_load_builtin(FONT_BUILTIN_DEBUG_MONO));
-
-	t3d_vec3_norm(&lightDirVec);
-
-	frameIdx = 0;
-
-	console_model = t3d_model_load("rom:/crt.t3dm");
 
 	debugf("Stop N Swop Test ROM\n");
 
@@ -244,15 +403,15 @@ int main(void) {
 	consoles_count = restore(&heap1, consoles, CONSOLE_PAYLOAD_SIZE, sizeof(console_t), MAX_CONSOLES, CONSOLE_MAGIC, CONSOLE_MASK);
 
 	if (consoles_count == 0) {
+		//n64brew_logo();
+		//libdragon_logo();
+
 		// Initial setup
-		debugf("Initializing 2 consoles\n");
-		for (int i=0; i<2; i++) {
-			console_t* console = add_console();
-			replicate_console(console);
-		}
 		reset_count = 0;
 		power_cycle_count = 0;
 		wrong_joypads_count_displayed = false;
+		current_level = 0;
+		game_state = INTRO;
 	} else {
 		// Restored at least once console: keep playing
 		for (int i=0; i<consoles_count; i++) {
@@ -268,11 +427,29 @@ int main(void) {
 		}
 		if (rst == RESET_COLD) {
 			power_cycle_count++;
+			level_power_cycle_count++;
+			// TODO Handle too many power cycles in level --> game over
 		} else {
 			reset_count++;
+			//level_reset_count_per_console++;
+			// Counter was already incremented in reset IRQ handler
+			// TODO Handle too many resets in level --> game over? penalty?
 		}
 	}
+	
+	display_init(RESOLUTION_320x240, DEPTH_16_BPP, FB_COUNT, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS);
 
+	t3d_init((T3DInitParams){});
+	viewport = t3d_viewport_create_buffered(FB_COUNT);
+  	rdpq_text_register_font(FONT_BUILTIN_DEBUG_MONO, rdpq_font_load_builtin(FONT_BUILTIN_DEBUG_MONO));
+
+	t3d_vec3_norm(&lightDirVec);
+
+	frameIdx = 0;
+
+	console_model = t3d_model_load("rom:/crt.t3dm");
+
+	// Happens only on reset
 	// Load model for each console
 	for (int i=0; i<consoles_count; i++) {
 		setup_console(&consoles[i]);
@@ -280,7 +457,6 @@ int main(void) {
 	
 	// Reset IRQ handler
 	register_RESET_handler(reset_interrupt_callback);
-	
 
 	update();
 	while (true) {
@@ -312,15 +488,6 @@ int main(void) {
 
 		joypad_poll();
 		if (!paused_wrong_joypads_count) {
-			if (current_joypad != -1) {
-				joypad_buttons_t pressed = joypad_get_buttons_pressed(current_joypad);
-				if (pressed.a && consoles_count < MAX_CONSOLES) {
-					console_t* console = add_console();
-					replicate_console(console);
-					setup_console(console);
-				}
-			}
-
 			update();
 		}
 
@@ -331,5 +498,6 @@ int main(void) {
 	}
 
   	t3d_destroy();
+	display_close();
 	return 0;
 }
