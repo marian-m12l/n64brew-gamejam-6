@@ -100,7 +100,7 @@ typedef struct {
     T3DVec3 rotation;
     T3DVec3 position;
 	float rot_speed;
-	color_t color;
+	float noise_strength;
 	// TODO T3DSkeleton, T3DAnim, wav64_t, c2AABB, ...
 	// Exclude remaining fields from replication
 	char __exclude;
@@ -117,10 +117,11 @@ displayable_t console_displayables[MAX_CONSOLES];
 uint32_t consoles_count = 0;
 int current_joypad = -1;
 uint32_t held_ms;
+bool in_reset;
 bool wrong_joypads_count = false;
 bool paused_wrong_joypads_count = false;
 
-volatile uint32_t reset_held __attribute__((section(".persistent")));
+//volatile uint32_t reset_held __attribute__((section(".persistent")));
 volatile uint32_t reset_count __attribute__((section(".persistent")));
 volatile uint32_t power_cycle_count __attribute__((section(".persistent")));
 volatile bool wrong_joypads_count_displayed __attribute__((section(".persistent")));
@@ -145,7 +146,10 @@ static void reset_interrupt_callback(void) {
 	}
 
 	// FIXME ticks are zeroe'd when resetting the console ??
-	reset_held = TICKS_READ();
+	//reset_held = TICKS_READ();
+	// TODO Just set hardware counter to 0 now
+	C0_WRITE_COUNT(0);
+	in_reset = true;
 
 	// Measure how long the reset button is held
 	/*while (true) {
@@ -174,6 +178,16 @@ void dynamic_tex_cb(void* userData, const T3DMaterial* material, rdpq_texparms_t
   }
 }
 
+void draw_bars(float height) {
+  if(height > 0) {
+	rdpq_mode_push();
+	rdpq_set_mode_fill(RGBA32(0, 0, 0, 0xff));
+	rdpq_fill_rectangle(0, 0, 320, height);
+	rdpq_fill_rectangle(0, 240 - height, 320, 240);
+	rdpq_mode_pop();
+  }
+}
+
 console_t* add_console() {
 	console_t* console = &consoles[consoles_count];
 	debugf("add console #%d (%p)\n", consoles_count, console);
@@ -182,7 +196,7 @@ console_t* add_console() {
 	console->rotation = (T3DVec3){{ 0.0f, 0.0f, 0.0f }};
 	console->position = (T3DVec3){{ -45.0f + 10.f * consoles_count, 30.0f - (rand() % 60), 0.0f }};
 	console->rot_speed = (5.0f - (rand() % 10)) * 0.02f;
-	console->color = RGBA32(255, 255, 255, 255);
+	console->noise_strength = (float)rand()/(float)RAND_MAX;;
 	console->displayable = &console_displayables[consoles_count];
 	consoles_count++;
 	return console;
@@ -198,8 +212,7 @@ void setup_console(console_t* console) {
 		//t3d_model_draw_skinned(displayable->model, &displayable->skel);
 		//t3d_model_draw(displayable->model);
 		// TODO the model uses the prim. color to blend between the offscreen-texture and white-noise
-		float noiseStrength = 0.5f;
-    	uint8_t blend = (uint8_t)(noiseStrength * 255.4f);
+		uint8_t blend = (uint8_t)(console->noise_strength * 255.4f);
     	rdpq_set_prim_color(RGBA32(blend, blend, blend, 255 - blend));
 		/* TODO render offscreen seen: on for each console? */
 		t3d_model_draw_custom(displayable->model, (T3DModelDrawConf){
@@ -434,9 +447,13 @@ void render_2d() {
 
 	heap_stats_t stats;
 	sys_get_heap_stats(&stats);
+	int heap_size = stats.total;
+	if (heap_size > 4*1024*1024) {
+		heap_size -= 4*1024*1024;
+	}
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 190, "       Resets : %ld/%d-%d-%d-%d", reset_count, level_reset_count_per_console[0], level_reset_count_per_console[1], level_reset_count_per_console[2], level_reset_count_per_console[3]);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 200, " Power cycles : %ld/%d", power_cycle_count, level_power_cycle_count);
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 210, "    Heap size : %d", stats.total);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 210, "    Heap size : %d", heap_size);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 220, "    Allocated : %d", stats.used);
 
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 160, "State     : %d", game_state);
@@ -492,11 +509,27 @@ int main(void) {
 	reset_type_t rst = sys_reset_type();
 	// TODO Treat separately cold, lukewarm (cold with remaining data in ram), and warm boots
 	debugf("Boot type: %s\n", rst == RESET_COLD ? "COLD" : "WARM");
-	held_ms = (rst == RESET_COLD) ? 0 : TICKS_TO_MS(TICKS_SINCE(reset_held));
+	held_ms = (rst == RESET_COLD) ? 0 : TICKS_TO_MS(TICKS_READ());
 	debugf("held_ms = %ld\n", held_ms);
-	
-	// Restore game data from heap replicas
-	consoles_count = restore(&heap1, consoles, CONSOLE_PAYLOAD_SIZE, sizeof(console_t), MAX_CONSOLES, CONSOLE_MAGIC, CONSOLE_MASK);
+
+	// TODO Skip restoration / force cold boot behaviour by holding R+A during startup ?
+	bool forceColdBoot;
+	joypad_poll();
+	JOYPAD_PORT_FOREACH(port) {
+		joypad_buttons_t held = joypad_get_buttons_held(port);
+		if (held.a && held.r) {
+			debugf("Forcing cold boot and skipping restoration\n");
+			forceColdBoot = true;
+		}
+	}
+
+	// TODO Also CLEAR the memory heaps ??
+	if (!forceColdBoot) {
+		// Restore game data from heap replicas
+		consoles_count = restore(&heap1, consoles, CONSOLE_PAYLOAD_SIZE, sizeof(console_t), MAX_CONSOLES, CONSOLE_MAGIC, CONSOLE_MASK);
+	} else {
+		// TODO Clean all variables (held_ms, ...) and memory heaps ?!
+	}
 
 	if (consoles_count == 0) {
 		//n64brew_logo();
@@ -518,7 +551,7 @@ int main(void) {
 			debugf("rotation: %f %f %f\n", console->rotation.x, console->rotation.y, console->rotation.z);
 			debugf("position: %f %f %f\n", console->position.x, console->position.y, console->position.z);
 			debugf("rot_speed: %f\n", console->rot_speed);
-			debugf("color: %d %d %d\n", console->color.r, console->color.g, console->color.b);
+			debugf("noise_strength: %f\n", console->noise_strength);
 			console->displayable = &console_displayables[i];
 			// Recreate replicas (alternative would be to keep replicas as-is)
 			replicate_console(console);
@@ -613,31 +646,28 @@ int main(void) {
 		rdpq_attach_clear(&offscreenSurf, &offscreenSurfZ);
 		t3d_frame_start();
 		t3d_viewport_attach(&viewportOffscreen);
-
-		/*t3d_light_set_ambient((uint8_t[4]){0xFF, 0xFF, 0xFF, 0xFF});
-		t3d_light_set_count(0);*/
-
-		/*t3d_matrix_push(&matrixBox[frameIdx]);
-		rspq_block_run(dplBox);
-		t3d_matrix_pop(1);*/
-
-		t3d_viewport_set_projection(&viewportOffscreen, T3D_DEG_TO_RAD(85.0f), 20.0f, 160.0f);
-		t3d_viewport_look_at(&viewportOffscreen, &offscreenCamPos, &offscreenCamTarget, &(T3DVec3){{0,1,0}});
-		t3d_viewport_attach(&viewportOffscreen);
-		t3d_light_set_ambient(colorAmbient);
-		t3d_light_set_count(0);
 		
-		//if (sync) rspq_syncpoint_wait(sync);
-		t3d_mat4fp_from_srt_euler(mtx,
-			(float[3]){scale, scale, scale},
-			(float[3]){0.0f, 0, 0},
-			(float[3]){0, 0, 0}
-		);
-		t3d_matrix_push(mtx);
-		t3d_model_draw(brew);
-		t3d_matrix_pop(1);
-		//sync = rspq_syncpoint_new();
-		//rdpq_sync_pipe();
+		// TODO Draw only for the current console !!
+		if (in_reset) {
+			// TODO Also remove noise quickly !
+			//draw_bars(TICKS_TO_MS(TICKS_READ()));
+			rdpq_clear(RGBA32(0xff, 0, 0, 0xff));
+		} else {
+			t3d_viewport_set_projection(&viewportOffscreen, T3D_DEG_TO_RAD(85.0f), 20.0f, 160.0f);
+			t3d_viewport_look_at(&viewportOffscreen, &offscreenCamPos, &offscreenCamTarget, &(T3DVec3){{0,1,0}});
+			t3d_viewport_attach(&viewportOffscreen);
+			t3d_light_set_ambient(colorAmbient);
+			t3d_light_set_count(0);
+			
+			t3d_mat4fp_from_srt_euler(mtx,
+				(float[3]){scale, scale, scale},
+				(float[3]){0.0f, 0, 0},
+				(float[3]){0, 0, 0}
+			);
+			t3d_matrix_push(mtx);
+			t3d_model_draw(brew);
+			t3d_matrix_pop(1);
+		}
 
 		rdpq_detach();
 
