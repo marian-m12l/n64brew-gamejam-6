@@ -10,7 +10,7 @@
 #include "persistence.h"
 
 
-#define FB_COUNT 3
+#define FB_COUNT 2
 
 T3DViewport viewport;
 T3DVec3 camPos = {{ 0.0f, 0.0f, 40.0f }};
@@ -207,7 +207,7 @@ void setup_console(console_t* console) {
 	displayable->model = console_model;
 	displayable->mat_fp = malloc_uncached(sizeof(T3DMat4FP) * FB_COUNT);	// FIXME Need to free !
 	rspq_block_begin();
-		t3d_matrix_push(displayable->mat_fp);
+		t3d_matrix_push(&displayable->mat_fp[frameIdx]);
 		//rdpq_set_prim_color(console->color);
 		//t3d_model_draw_skinned(displayable->model, &displayable->skel);
 		//t3d_model_draw(displayable->model);
@@ -242,7 +242,7 @@ void load_level() {
 	for (int i=0; i<level->consoles_count; i++) {
 		console_t* console = add_console();
 		replicate_console(console);
-		setup_console(&consoles[i]);
+		setup_console(console);
 		// Position consoles
 		float scale = 0.18f * powf(0.7f, level->consoles_count);
 		float x_offset = 20.0f;
@@ -302,6 +302,7 @@ void load_level() {
 				break;
 			}
 		}
+		update_console(console);
 	}
 
 	for (int i=0; i<MAX_CONSOLES; i++) {
@@ -345,14 +346,14 @@ void update() {
 			break;
 		}
 		case IN_GAME: {
-			// Move models
-			for (int i=0; i<consoles_count; i++) {
+			// Move models TODO
+			/*for (int i=0; i<consoles_count; i++) {
 				console_t* console = &consoles[i];
 				console->rotation.x -= console->rot_speed * 0.2f;
 				console->rotation.y -= console->rot_speed;
 				// Need to update replicas with new values
 				update_console(console);
-			}
+			}*/
 
 			bool cleared = false;
 
@@ -371,6 +372,8 @@ void update() {
 			// TODO Handle end condition and change level
 			if (cleared) {
 				game_state = LEVEL_CLEARED;
+				// TODO unload level immediately ?
+				clear_level();
 			}
 			break;
 		}
@@ -379,7 +382,7 @@ void update() {
 				joypad_buttons_t pressed = joypad_get_buttons_pressed(current_joypad);
 				if (pressed.a || pressed.start) {
 					// Load next level
-					clear_level();
+					//clear_level();
 					current_level++;
 					if (current_level < TOTAL_LEVELS) {
 						load_level();
@@ -406,8 +409,6 @@ void update() {
 }
 
 void render_3d() {
-	frameIdx = (frameIdx + 1) % FB_COUNT;
-
 	t3d_frame_start();
 	t3d_viewport_attach(&viewport);
 
@@ -597,7 +598,7 @@ int main(void) {
     uint8_t colorAmbient[4] = {0xff, 0xff, 0xff, 0xFF};
     float scale = 0.08f;
 
-    T3DMat4FP *mtx = malloc_uncached(sizeof(T3DMat4FP));
+    T3DMat4FP *mtx = malloc_uncached(sizeof(T3DMat4FP) * FB_COUNT);
 
 	// Happens only on reset
 	// Load model for each console
@@ -610,6 +611,8 @@ int main(void) {
 
 	update();
 	while (true) {
+		frameIdx = (frameIdx + 1) % FB_COUNT;
+
 		// Identify the current joypad port and make sure only one is plugged
 		int ports = 0;
 		JOYPAD_PORT_FOREACH(port) {
@@ -659,12 +662,12 @@ int main(void) {
 			t3d_light_set_ambient(colorAmbient);
 			t3d_light_set_count(0);
 			
-			t3d_mat4fp_from_srt_euler(mtx,
+			t3d_mat4fp_from_srt_euler(&mtx[frameIdx],
 				(float[3]){scale, scale, scale},
 				(float[3]){0.0f, 0, 0},
 				(float[3]){0, 0, 0}
 			);
-			t3d_matrix_push(mtx);
+			t3d_matrix_push(&mtx[frameIdx]);
 			t3d_model_draw(brew);
 			t3d_matrix_pop(1);
 		}
