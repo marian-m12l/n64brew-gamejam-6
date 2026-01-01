@@ -4,6 +4,7 @@
 #include <t3d/t3d.h>
 #include <t3d/t3dmath.h>
 #include <t3d/t3dmodel.h>
+#include <t3d/t3dskeleton.h>
 
 #include "logo.h"
 #include "pc64.h"
@@ -21,6 +22,13 @@ T3DVec3 lightDirVec = {{-1.0f, 1.0f, 1.0f}};
 int frameIdx = 0;
 
 T3DModel* console_model;
+T3DModel* n64_model;
+
+static sprite_t* bg_pattern;
+static sprite_t* bg_gradient;
+static float gtime;
+
+static xm64player_t music;
 
 
 #define OFFSCREEN_SIZE 80
@@ -91,7 +99,12 @@ level_t levels[TOTAL_LEVELS] = {
 typedef struct {
     T3DModel* model;
     T3DMat4FP* mat_fp;
+	T3DSkeleton skel;
+	int bone;
     rspq_block_t* dpl;
+    T3DModel* model2;
+    T3DMat4FP* mat_fp2;
+    rspq_block_t* dpl2;
 } displayable_t;
 
 typedef struct {
@@ -120,6 +133,8 @@ uint32_t held_ms;
 bool in_reset;
 bool wrong_joypads_count = false;
 bool paused_wrong_joypads_count = false;
+
+// TODO game_data_t { consoles, level, current screen, counters, ...} --> replicated with highest persistence !!!
 
 //volatile uint32_t reset_held __attribute__((section(".persistent")));
 volatile uint32_t reset_count __attribute__((section(".persistent")));
@@ -206,8 +221,11 @@ void setup_console(console_t* console) {
 	displayable_t* displayable = console->displayable;
 	displayable->model = console_model;
 	displayable->mat_fp = malloc_uncached(sizeof(T3DMat4FP) * FB_COUNT);	// FIXME Need to free !
+	displayable->skel = t3d_skeleton_create_buffered(displayable->model, 1 /* FIXME FB_COUNT*/);	// FIXME free
+	displayable->bone = t3d_skeleton_find_bone(&displayable->skel, "console");	// FIXME 1 PER CONSOLE !!
+	//debugf("attachedBone=%d\n", displayable->bone);
 	rspq_block_begin();
-		t3d_matrix_push(&displayable->mat_fp[frameIdx]);
+		//t3d_matrix_push(&displayable->mat_fp[frameIdx]);
 		//rdpq_set_prim_color(console->color);
 		//t3d_model_draw_skinned(displayable->model, &displayable->skel);
 		//t3d_model_draw(displayable->model);
@@ -218,9 +236,19 @@ void setup_console(console_t* console) {
 		t3d_model_draw_custom(displayable->model, (T3DModelDrawConf){
 			.userData = &offscreenSurf,
 			.dynTextureCb = dynamic_tex_cb,
+			.matrices = displayable->skel.bufferCount == 1
+				? displayable->skel.boneMatricesFP
+				: (const T3DMat4FP*)t3d_segment_placeholder(T3D_SEGMENT_SKELETON)
 		});
-		t3d_matrix_pop(1);
+		//t3d_model_draw_skinned(displayable->model, &displayable->skel);//[frameIdx]);
+		//t3d_matrix_pop(1);
 	displayable->dpl = rspq_block_end();
+
+	displayable->model2 = n64_model;
+	displayable->mat_fp2 = malloc_uncached(sizeof(T3DMat4FP) * FB_COUNT);	// FIXME Need to free !
+	rspq_block_begin();
+		t3d_model_draw(displayable->model2);
+	displayable->dpl2 = rspq_block_end();
 }
 
 void replicate_console(console_t* console) {
@@ -408,13 +436,50 @@ void update() {
 	}
 }
 
+static void draw_bg(sprite_t* pattern, sprite_t* gradient, float offset) {
+  rdpq_mode_push();
+  
+  rdpq_set_mode_standard();
+  rdpq_mode_begin();
+    rdpq_mode_blender(0);
+    rdpq_mode_alphacompare(0);
+    rdpq_mode_combiner(RDPQ_COMBINER2(
+      (TEX0,0,TEX1,0), (0,0,0,1),
+      (COMBINED,0,PRIM,0), (0,0,0,1)
+    ));
+    rdpq_mode_dithering(DITHER_BAYER_BAYER);
+    rdpq_mode_filter(FILTER_BILINEAR);
+  rdpq_mode_end();
+
+  float brightness = 0.75f;
+  rdpq_set_prim_color((color_t){0xcc*brightness, 0xcc*brightness, 0xff, 0xff});
+
+  offset = fmodf(offset, 64.0f);
+  rdpq_texparms_t param_pattern = {
+    .s = {.repeats = REPEAT_INFINITE, .mirror = true, .translate = offset, .scale_log = -1},
+    .t = {.repeats = REPEAT_INFINITE, .mirror = true, .translate = offset, .scale_log = -1},
+  };
+  rdpq_texparms_t param_grad = {
+    .s = {.repeats = REPEAT_INFINITE},
+    .t = {.repeats = 1, .scale_log = 2},
+  };
+  rdpq_tex_multi_begin();
+    rdpq_sprite_upload(TILE0, pattern, &param_pattern);
+    rdpq_sprite_upload(TILE1, gradient, &param_grad);
+  rdpq_tex_multi_end();
+
+  rdpq_texture_rectangle(TILE0, 0,0, display_get_width(), display_get_height(), 0, 0);
+
+  rdpq_mode_pop();
+}
+
 void render_3d() {
 	t3d_frame_start();
 	t3d_viewport_attach(&viewport);
 
 	t3d_screen_clear_color(RGBA32(80, 80, 80, 255));
 	t3d_screen_clear_depth();
-
+	
 	t3d_light_set_ambient(colorAmbient);
 	t3d_light_set_directional(0, colorDir, &lightDirVec);
 	t3d_light_set_count(1);
@@ -423,16 +488,39 @@ void render_3d() {
 		case INTRO:
 			break;
 		case IN_GAME: {
+			draw_bg(bg_pattern, bg_gradient, gtime * 4.0f);
 			for (int i=0; i<consoles_count; i++) {
 				console_t* console = &consoles[i];
+				t3d_skeleton_update(&console->displayable->skel);
 				t3d_mat4fp_from_srt_euler(
 					&console->displayable->mat_fp[frameIdx],
 					console->scale.v,
 					console->rotation.v,
+					//(float[3]){ 0.0f, M_PI/4.0f, 0.0f },
 					console->position.v
 				);
 				// FIXME ??? rdpq_set_prim_color(console->color);
+				t3d_matrix_push(&console->displayable->mat_fp[frameIdx]);
+      			t3d_skeleton_use(&console->displayable->skel);
+				//rdpq_set_prim_color(RGBA32(0, 255, 0, 255));
 				rspq_block_run(console->displayable->dpl);
+				if(console->displayable->bone >= 0) {
+					float s = 8.0f;
+					t3d_mat4fp_from_srt_euler(
+						&console->displayable->mat_fp2[frameIdx],
+						//console->scale.v,
+						(float[3]){ console->scale.x * s, console->scale.y * s, console->scale.z * s },
+						(float[3]){ 0.0f, 0.0f, 0.0f },
+						(float[3]){ 0.0f, 0.0f, 0.0f }
+					);
+					// to attach another model, simply use a bone form the skeleton:
+					t3d_matrix_push(&console->displayable->skel.boneMatricesFP[console->displayable->bone]);
+					t3d_matrix_push(&console->displayable->mat_fp2[frameIdx]); // apply local matrix of the model
+					//rdpq_set_prim_color(RGBA32(255, 0, 0, 255));
+					rspq_block_run(console->displayable->dpl2);
+					t3d_matrix_pop(2);
+				}
+				t3d_matrix_pop(1);
 			}
 			break;
 		}
@@ -582,7 +670,19 @@ int main(void) {
 
 	frameIdx = 0;
 
+	//audio_init(44100, 4);
+	//mixer_init(20);
+
+    xm64player_open(&music, "rom:/flyaway.xm64");
+    xm64player_set_loop(&music, true);
+    xm64player_set_vol(&music, 0.55);
+    xm64player_play(&music, 0);
+
 	console_model = t3d_model_load("rom:/crt.t3dm");
+	n64_model = t3d_model_load("rom:/console.t3dm");
+	
+	bg_pattern = sprite_load("rom:/pattern.i8.sprite");
+	bg_gradient = sprite_load("rom:/gradient.i8.sprite");
 
 	viewportOffscreen = t3d_viewport_create_buffered(FB_COUNT);
   	t3d_viewport_set_area(&viewportOffscreen, 0, 0, OFFSCREEN_SIZE, OFFSCREEN_SIZE);
@@ -612,6 +712,10 @@ int main(void) {
 	update();
 	while (true) {
 		frameIdx = (frameIdx + 1) % FB_COUNT;
+		float frametime = display_get_delta_time();
+		gtime += frametime;
+
+		mixer_try_play();
 
 		// Identify the current joypad port and make sure only one is plugged
 		int ports = 0;
@@ -667,6 +771,7 @@ int main(void) {
 				(float[3]){0.0f, 0, 0},
 				(float[3]){0, 0, 0}
 			);
+			// TODO display list !
 			t3d_matrix_push(&mtx[frameIdx]);
 			t3d_model_draw(brew);
 			t3d_matrix_pop(1);

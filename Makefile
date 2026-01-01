@@ -15,10 +15,12 @@ all: $(TARGET).z64
 assets_png = $(wildcard assets/*.png)
 assets_gltf = $(wildcard assets/*.glb)
 assets_mp3 = $(wildcard assets/*.mp3)
+assets_xm = $(wildcard assets/*.xm)
 assets_conv = $(addprefix filesystem/,$(notdir $(assets_png:%.png=%.sprite))) \
 			  $(addprefix filesystem/,$(notdir $(assets_ttf:%.ttf=%.font64))) \
 			  $(addprefix filesystem/,$(notdir $(assets_gltf:%.glb=%.t3dm))) \
-			  $(addprefix filesystem/,$(notdir $(assets_mp3:%.mp3=%.wav64)))
+			  $(addprefix filesystem/,$(notdir $(assets_mp3:%.mp3=%.wav64))) \
+			  $(addprefix filesystem/,$(notdir $(assets_xm:%.xm=%.xm64)))
 
 filesystem/%.sprite: assets/%.png
 	@mkdir -p $(dir $@)
@@ -35,6 +37,11 @@ filesystem/%.wav64: assets/%.mp3
 	@mkdir -p $(dir $@)
 	@echo "    [SFX] $@"
 	$(N64_AUDIOCONV) $(AUDIOCONV_FLAGS) -o $(dir $@) "$<"
+
+filesystem/%.xm64: assets/%.xm
+	@mkdir -p $(dir $@)
+	@echo "    [AUDIO] $@"
+	@$(N64_AUDIOCONV) $(AUDIOCONV_FLAGS) -o filesystem "$<"
 
 filesystem/dragon.wav64: AUDIOCONV_FLAGS += --wav-resample 32000 --wav-mono --wav-compress 3
 
