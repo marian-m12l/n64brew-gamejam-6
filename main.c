@@ -505,6 +505,7 @@ void render_3d() {
 				//rdpq_set_prim_color(RGBA32(0, 255, 0, 255));
 				rspq_block_run(console->displayable->dpl);
 				if(console->displayable->bone >= 0) {
+  					rdpq_mode_push();
 					float s = 8.0f;
 					t3d_mat4fp_from_srt_euler(
 						&console->displayable->mat_fp2[frameIdx],
@@ -519,6 +520,7 @@ void render_3d() {
 					//rdpq_set_prim_color(RGBA32(255, 0, 0, 255));
 					rspq_block_run(console->displayable->dpl2);
 					t3d_matrix_pop(2);
+  					rdpq_mode_pop();
 				}
 				t3d_matrix_pop(1);
 			}
