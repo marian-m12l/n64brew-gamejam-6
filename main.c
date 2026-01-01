@@ -771,9 +771,8 @@ int main(void) {
 				(float[3]){0.0f, 0, 0},
 				(float[3]){0, 0, 0}
 			);
-			// TODO display list !
 			t3d_matrix_push(&mtx[frameIdx]);
-			t3d_model_draw(brew);
+			rspq_block_run(dplBrew);
 			t3d_matrix_pop(1);
 		}
 
