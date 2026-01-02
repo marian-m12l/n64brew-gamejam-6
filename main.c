@@ -12,6 +12,7 @@
 
 
 #define FB_COUNT 2
+#define OFFSCREEN_SIZE 80
 
 T3DViewport viewport;
 T3DVec3 camPos = {{ 0.0f, 0.0f, 40.0f }};
@@ -30,12 +31,14 @@ static float gtime;
 
 static xm64player_t music;
 
+T3DVec3 offscreenCamPos = {{0, 0.0f, 50.0f}};
+T3DVec3 offscreenCamTarget = {{0, 0.0f, 0}};
+uint8_t offsetColorAmbient[4] = {0xff, 0xff, 0xff, 0xFF};
+float scale = 0.08f;
 
-#define OFFSCREEN_SIZE 80
+rspq_block_t* dplBrew;
+T3DMat4FP* mtxBrew;
 
-surface_t offscreenSurf;
-surface_t offscreenSurfZ;
-T3DViewport viewportOffscreen;
 
 // TODO Game data structures
 
@@ -97,14 +100,21 @@ level_t levels[TOTAL_LEVELS] = {
 
 // Struct to hold runtime stuff (model, display list, ...)
 typedef struct {
-    T3DModel* model;
+    // CRT model
+	T3DModel* model;
     T3DMat4FP* mat_fp;
 	T3DSkeleton skel;
 	int bone;
     rspq_block_t* dpl;
-    T3DModel* model2;
+    // Console model
+	T3DModel* model2;
     T3DMat4FP* mat_fp2;
     rspq_block_t* dpl2;
+	// CRT screen
+	surface_t offscreen_surf;
+	surface_t offscreen_surf_z;
+	T3DViewport offscreen_viewport;
+    T3DMat4FP* offscreen_mat_fp;
 } displayable_t;
 
 typedef struct {
@@ -211,7 +221,7 @@ console_t* add_console() {
 	console->rotation = (T3DVec3){{ 0.0f, 0.0f, 0.0f }};
 	console->position = (T3DVec3){{ -45.0f + 10.f * consoles_count, 30.0f - (rand() % 60), 0.0f }};
 	console->rot_speed = (5.0f - (rand() % 10)) * 0.02f;
-	console->noise_strength = (float)rand()/(float)RAND_MAX;;
+	console->noise_strength = 0.0f * (float)rand()/(float)RAND_MAX;
 	console->displayable = &console_displayables[consoles_count];
 	consoles_count++;
 	return console;
@@ -219,33 +229,32 @@ console_t* add_console() {
 
 void setup_console(console_t* console) {
 	displayable_t* displayable = console->displayable;
-	displayable->model = console_model;
-	displayable->mat_fp = malloc_uncached(sizeof(T3DMat4FP) * FB_COUNT);	// FIXME Need to free !
-	displayable->skel = t3d_skeleton_create_buffered(displayable->model, 1 /* FIXME FB_COUNT*/);	// FIXME free
-	displayable->bone = t3d_skeleton_find_bone(&displayable->skel, "console");	// FIXME 1 PER CONSOLE !!
-	//debugf("attachedBone=%d\n", displayable->bone);
+	displayable->model = console_model;	//t3d_model_load("rom:/crt.t3dm");	//console_model; // TODO FREE
+	displayable->mat_fp = malloc_uncached(sizeof(T3DMat4FP) * FB_COUNT);
+	displayable->skel = t3d_skeleton_create_buffered(displayable->model, 1 /* FIXME FB_COUNT*/);
+	displayable->bone = t3d_skeleton_find_bone(&displayable->skel, "console");
+	displayable->offscreen_surf = surface_alloc(FMT_RGBA16, OFFSCREEN_SIZE, OFFSCREEN_SIZE);
+	displayable->offscreen_surf_z = surface_alloc(FMT_RGBA16, OFFSCREEN_SIZE, OFFSCREEN_SIZE);
+	displayable->offscreen_viewport = t3d_viewport_create_buffered(FB_COUNT);
+  	t3d_viewport_set_area(&displayable->offscreen_viewport, 0, 0, OFFSCREEN_SIZE, OFFSCREEN_SIZE);
+	displayable->offscreen_mat_fp = malloc_uncached(sizeof(T3DMat4FP) * FB_COUNT);
 	rspq_block_begin();
 		//t3d_matrix_push(&displayable->mat_fp[frameIdx]);
-		//rdpq_set_prim_color(console->color);
-		//t3d_model_draw_skinned(displayable->model, &displayable->skel);
-		//t3d_model_draw(displayable->model);
 		// TODO the model uses the prim. color to blend between the offscreen-texture and white-noise
 		uint8_t blend = (uint8_t)(console->noise_strength * 255.4f);
     	rdpq_set_prim_color(RGBA32(blend, blend, blend, 255 - blend));
-		/* TODO render offscreen seen: on for each console? */
 		t3d_model_draw_custom(displayable->model, (T3DModelDrawConf){
-			.userData = &offscreenSurf,
+			.userData = &displayable->offscreen_surf,
 			.dynTextureCb = dynamic_tex_cb,
 			.matrices = displayable->skel.bufferCount == 1
 				? displayable->skel.boneMatricesFP
 				: (const T3DMat4FP*)t3d_segment_placeholder(T3D_SEGMENT_SKELETON)
 		});
-		//t3d_model_draw_skinned(displayable->model, &displayable->skel);//[frameIdx]);
 		//t3d_matrix_pop(1);
 	displayable->dpl = rspq_block_end();
 
 	displayable->model2 = n64_model;
-	displayable->mat_fp2 = malloc_uncached(sizeof(T3DMat4FP) * FB_COUNT);	// FIXME Need to free !
+	displayable->mat_fp2 = malloc_uncached(sizeof(T3DMat4FP) * FB_COUNT);
 	rspq_block_begin();
 		t3d_model_draw(displayable->model2);
 	displayable->dpl2 = rspq_block_end();
@@ -348,8 +357,16 @@ void clear_level() {
 		console_t* console = &consoles[i];
 		erase_and_free_replicas(&heap1, console->replicas, CONSOLE_REPLICAS);
 		displayable_t* displayable = console->displayable;
+		// FIXME ! t3d_model_free(displayable->model);
 		free_uncached(displayable->mat_fp);
+		t3d_skeleton_destroy(&displayable->skel);
+		surface_free(&displayable->offscreen_surf);
+		surface_free(&displayable->offscreen_surf_z);
+		t3d_viewport_destroy(&displayable->offscreen_viewport);
+		free_uncached(displayable->offscreen_mat_fp);
 		rspq_block_free(displayable->dpl);
+		free_uncached(displayable->mat_fp2);
+		rspq_block_free(displayable->dpl2);
 		memset(displayable, 0, sizeof(displayable_t));
 		memset(console, 0, sizeof(console_t));
 		consoles_count--;
@@ -473,6 +490,45 @@ static void draw_bg(sprite_t* pattern, sprite_t* gradient, float offset) {
   rdpq_mode_pop();
 }
 
+void render_offscreen() {
+	if (game_state == IN_GAME) {
+		for (int i=0; i<consoles_count; i++) {
+			console_t* console = &consoles[i];
+			// ======== Draw (Offscreen) ======== //
+			// Render the offscreen-scene first, for that we attach the extra buffer instead of the screen one
+			rdpq_attach_clear(&console->displayable->offscreen_surf, &console->displayable->offscreen_surf_z);
+			t3d_frame_start();
+			t3d_viewport_attach(&console->displayable->offscreen_viewport);
+			
+			// TODO Draw only for the current console !!
+			if (in_reset) {
+				// TODO Also remove noise quickly !
+				//draw_bars(TICKS_TO_MS(TICKS_READ()));
+				rdpq_clear(RGBA32(0xff, 0, 0, 0xff));
+			} else {
+				t3d_viewport_set_projection(&console->displayable->offscreen_viewport, T3D_DEG_TO_RAD(85.0f), 20.0f, 160.0f);
+				t3d_viewport_look_at(&console->displayable->offscreen_viewport, &offscreenCamPos, &offscreenCamTarget, &(T3DVec3){{0,1,0}});
+				t3d_viewport_attach(&console->displayable->offscreen_viewport);
+				t3d_light_set_ambient(offsetColorAmbient);
+				t3d_light_set_count(0);
+				
+				t3d_mat4fp_from_srt_euler(&console->displayable->offscreen_mat_fp[frameIdx],
+					(float[3]){scale, scale, scale},
+					(float[3]){0.0f, gtime * (i+1), 0},
+					(float[3]){0, 0, 0}
+				);
+				t3d_matrix_push(&console->displayable->offscreen_mat_fp[frameIdx]);
+				rdpq_debug_log_msg("model_draw_brew");
+				rspq_block_run(dplBrew);
+				t3d_matrix_pop(1);
+				//rdpq_sync_pipe();
+			}
+
+			rdpq_detach();
+		}
+	}
+}
+
 void render_3d() {
 	t3d_frame_start();
 	t3d_viewport_attach(&viewport);
@@ -490,6 +546,7 @@ void render_3d() {
 		case IN_GAME: {
 			draw_bg(bg_pattern, bg_gradient, gtime * 4.0f);
 			for (int i=0; i<consoles_count; i++) {
+				//rdpq_sync_pipe();
 				console_t* console = &consoles[i];
 				t3d_skeleton_update(&console->displayable->skel);
 				t3d_mat4fp_from_srt_euler(
@@ -503,9 +560,23 @@ void render_3d() {
 				t3d_matrix_push(&console->displayable->mat_fp[frameIdx]);
       			t3d_skeleton_use(&console->displayable->skel);
 				//rdpq_set_prim_color(RGBA32(0, 255, 0, 255));
+				rdpq_debug_log_msg("model_draw_crt");
 				rspq_block_run(console->displayable->dpl);
+/*
+				uint8_t blend = (uint8_t)(/*console->noise_strength*//*0 * 255.4f);
+    	rdpq_set_prim_color(RGBA32(blend, blend, blend, 255 - blend));
+		t3d_model_draw_custom(console->displayable->model, (T3DModelDrawConf){
+			.userData = &console->displayable->offscreen_surf,
+			.dynTextureCb = dynamic_tex_cb,
+			.matrices = console->displayable->skel.bufferCount == 1
+				? console->displayable->skel.boneMatricesFP
+				: (const T3DMat4FP*)t3d_segment_placeholder(T3D_SEGMENT_SKELETON)
+		});
+*/
 				if(console->displayable->bone >= 0) {
+					//rdpq_sync_pipe();
   					rdpq_mode_push();
+					//rdpq_sync_pipe();
 					float s = 8.0f;
 					t3d_mat4fp_from_srt_euler(
 						&console->displayable->mat_fp2[frameIdx],
@@ -518,9 +589,16 @@ void render_3d() {
 					t3d_matrix_push(&console->displayable->skel.boneMatricesFP[console->displayable->bone]);
 					t3d_matrix_push(&console->displayable->mat_fp2[frameIdx]); // apply local matrix of the model
 					//rdpq_set_prim_color(RGBA32(255, 0, 0, 255));
+					rdpq_debug_log_msg("model_draw_console");
+					//rdpq_sync_pipe();
+					if (current_joypad == i) {
+						rdpq_set_prim_color(RGBA32(0, 200, 0, 255));
+					}
 					rspq_block_run(console->displayable->dpl2);
+					rdpq_sync_pipe();
 					t3d_matrix_pop(2);
   					rdpq_mode_pop();
+					//rdpq_sync_pipe();
 				}
 				t3d_matrix_pop(1);
 			}
@@ -587,6 +665,8 @@ int main(void) {
     timer_init();
     audio_init(32000, 3);
     mixer_init(32);
+
+	//rdpq_debug_start();	// TODO Debug only
 
     // Initialize the random number generator, then call rand() every
     // frame so to get random behavior also in emulators.
@@ -660,9 +740,6 @@ int main(void) {
 	}
 	
 	display_init(RESOLUTION_320x240, DEPTH_16_BPP, FB_COUNT, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS);
-	
-	offscreenSurf = surface_alloc(FMT_RGBA16, OFFSCREEN_SIZE, OFFSCREEN_SIZE);
-	offscreenSurfZ = surface_alloc(FMT_RGBA16, OFFSCREEN_SIZE, OFFSCREEN_SIZE);
 
 	t3d_init((T3DInitParams){});
 	viewport = t3d_viewport_create_buffered(FB_COUNT);
@@ -686,21 +763,13 @@ int main(void) {
 	bg_pattern = sprite_load("rom:/pattern.i8.sprite");
 	bg_gradient = sprite_load("rom:/gradient.i8.sprite");
 
-	viewportOffscreen = t3d_viewport_create_buffered(FB_COUNT);
-  	t3d_viewport_set_area(&viewportOffscreen, 0, 0, OFFSCREEN_SIZE, OFFSCREEN_SIZE);
-
 	T3DModel *brew = t3d_model_load("rom:/brew_logo.t3dm");
 	
 	rspq_block_begin();
-	t3d_model_draw(brew);
-	rspq_block_t *dplBrew = rspq_block_end();
+		t3d_model_draw(brew);
+	dplBrew = rspq_block_end();
 
-    T3DVec3 offscreenCamPos = {{0, 0.0f, 50.0f}};
-    T3DVec3 offscreenCamTarget = {{0, 0.0f, 0}};
-    uint8_t colorAmbient[4] = {0xff, 0xff, 0xff, 0xFF};
-    float scale = 0.08f;
-
-    T3DMat4FP *mtx = malloc_uncached(sizeof(T3DMat4FP) * FB_COUNT);
+    //mtxBrew = malloc_uncached(sizeof(T3DMat4FP) * FB_COUNT);
 
 	// Happens only on reset
 	// Load model for each console
@@ -750,35 +819,7 @@ int main(void) {
 			update();
 		}
 
-		// ======== Draw (Offscreen) ======== //
-    	// Render the offscreen-scene first, for that we attach the extra buffer instead of the screen one
-		rdpq_attach_clear(&offscreenSurf, &offscreenSurfZ);
-		t3d_frame_start();
-		t3d_viewport_attach(&viewportOffscreen);
-		
-		// TODO Draw only for the current console !!
-		if (in_reset) {
-			// TODO Also remove noise quickly !
-			//draw_bars(TICKS_TO_MS(TICKS_READ()));
-			rdpq_clear(RGBA32(0xff, 0, 0, 0xff));
-		} else {
-			t3d_viewport_set_projection(&viewportOffscreen, T3D_DEG_TO_RAD(85.0f), 20.0f, 160.0f);
-			t3d_viewport_look_at(&viewportOffscreen, &offscreenCamPos, &offscreenCamTarget, &(T3DVec3){{0,1,0}});
-			t3d_viewport_attach(&viewportOffscreen);
-			t3d_light_set_ambient(colorAmbient);
-			t3d_light_set_count(0);
-			
-			t3d_mat4fp_from_srt_euler(&mtx[frameIdx],
-				(float[3]){scale, scale, scale},
-				(float[3]){0.0f, 0, 0},
-				(float[3]){0, 0, 0}
-			);
-			t3d_matrix_push(&mtx[frameIdx]);
-			rspq_block_run(dplBrew);
-			t3d_matrix_pop(1);
-		}
-
-		rdpq_detach();
+		render_offscreen();
 
 		rdpq_attach(display_get(), display_get_zbuf());
 		render_3d();
@@ -793,8 +834,8 @@ int main(void) {
 
   	t3d_destroy();
 
-	surface_free(&offscreenSurf);
-	surface_free(&offscreenSurfZ);
+	//surface_free(&offscreenSurf);
+	//surface_free(&offscreenSurfZ);
 
 	display_close();
 	return 0;
