@@ -5,6 +5,7 @@
 #include <t3d/t3dmath.h>
 #include <t3d/t3dmodel.h>
 #include <t3d/t3dskeleton.h>
+#include <t3d/tpx.h>
 
 #include "logo.h"
 #include "pc64.h"
@@ -27,6 +28,8 @@ T3DModel* n64_model;
 
 static sprite_t* bg_pattern;
 static sprite_t* bg_gradient;
+
+static float frametime;
 static float gtime;
 
 static xm64player_t music;
@@ -41,6 +44,18 @@ static sprite_t* spr_b;
 static sprite_t* spr_progress;
 static sprite_t* spr_circlemask;
 
+static sprite_t* spr_swirl;
+
+// TODO One particle system PER CONSOLE
+uint32_t particleCountMax = 128;
+uint32_t particleCount;
+uint32_t allocSize;
+TPXParticle* particles;
+T3DMat4FP* matPartFP;
+float tpx_time = 0;
+float timeTile = 0;
+
+static int currentPart  = 0;
 
 // TODO Game data structures
 
@@ -506,6 +521,150 @@ static void drawprogress(int x, int y, float progress, color_t col)
     rdpq_mode_combiner(RDPQ_COMBINER1((TEX0,0,PRIM,0), (TEX0,0,PRIM,0)));
 }
 
+
+// Fire color: white -> yellow/orange -> red -> black
+static void gradient_fire(uint8_t *color, float t) {
+    t = fminf(1.0f, fmaxf(0.0f, t));
+    t = 0.8f - t;
+    t *= t;
+
+    if (t < 0.25f) { // Dark red to bright red
+      color[0] = (uint8_t)(200 * (t / 0.25f)) + 55;
+      color[1] = 0;
+      color[2] = 0;
+    } else if (t < 0.5f) { // Bright red to yellow
+      color[0] = 255;
+      color[1] = (uint8_t)(255 * ((t - 0.25f) / 0.25f));
+      color[2] = 0;
+    } else if (t < 0.75f) { // Yellow to white (optional, if you want a bright white center)
+      color[0] = 255;
+      color[1] = 255;
+      color[2] = (uint8_t)(255 * ((t - 0.5f) / 0.25f));
+    } else { // White to black
+      color[0] = (uint8_t)(255 * (1.0f - (t - 0.75f) / 0.25f));
+      color[1] = (uint8_t)(255 * (1.0f - (t - 0.75f) / 0.25f));
+      color[2] = (uint8_t)(255 * (1.0f - (t - 0.75f) / 0.25f));
+    }
+}
+
+
+/**
+ * Particle system for a fire effect.
+ * This will simulate particles over time by moving them up and changing their color.
+ * The current position is used to spawn new particles, so it can move over time leaving a trail behind.
+ */
+static void simulate_particles_smoke(TPXParticle *particles, uint32_t partCount, float posX, float posZ) {
+  int p = currentPart / 2;
+  if(currentPart % (1+(rand() % 3)) == 0) {
+    int8_t *ptPos  = tpx_buffer_get_pos(particles, p);
+    int8_t *size   = tpx_buffer_get_size(particles, p);
+    uint8_t *color = tpx_buffer_get_rgba(particles, p);
+
+    ptPos[0] = posX + (rand() % 16) - 8;
+    ptPos[1] = -126;
+    gradient_fire(color, 0);
+    color[3] = ((PhysicalAddr(ptPos) % 8) * 32);
+
+    ptPos[2] = posZ + (rand() % 16) - 8;
+    *size = 60 + (rand() % 10);
+  }
+  currentPart = (currentPart + 1) % partCount;
+
+  // move all up by one unit
+  for (int i = 0; i < partCount/2; i++) {
+    gradient_fire(particles[i].colorA, (particles[i].posA[1] + 127) / 150.0f);
+    gradient_fire(particles[i].colorB, (particles[i].posB[1] + 127) / 150.0f);
+
+    particles[i].posA[1] += 1;
+    particles[i].posB[1] += 1;
+    if(currentPart % 4 == 0) {
+      particles[i].sizeA -= 2;
+      particles[i].sizeB -= 2;
+      if(particles[i].sizeA < 0)particles[i].sizeA = 0;
+      if(particles[i].sizeB < 0)particles[i].sizeB = 0;
+    }
+  }
+}
+
+static void drawsmoke(T3DVec3 position) {
+	//particleRot = (T3DVec3){{0,0,0}};
+	tpx_time += frametime * 1.0f;
+	timeTile += frametime * 25.1f;
+	particleCount = 128;
+	// FIXME console position !
+	float posX = position.x;// fm_cosf(tpx_time) * 80.0f;
+	float posZ = position.z;//fm_sinf(2*tpx_time) * 40.0f;
+
+	rdpq_mode_push();
+
+	simulate_particles_smoke(particles, particleCount, posX, posZ);
+	//particleMatScale = (T3DVec3){{0.9f, partMatScaleVal, 0.9f}};
+	//particlePos.y = partMatScaleVal * 130.0f;
+	rdpq_set_env_color((color_t){0xFF, 0xFF, 0xFF, 0xFF});
+	//isSpriteRot = true;
+
+
+    rdpq_sync_pipe();
+    rdpq_sync_tile();
+    rdpq_sync_load();
+    rdpq_set_mode_standard();
+    rdpq_mode_antialias(AA_NONE);
+    rdpq_mode_zbuf(true, true);
+    rdpq_mode_zoverride(true, 0, 0);
+    rdpq_mode_filter(FILTER_POINT);
+    rdpq_mode_alphacompare(10);
+
+    rdpq_mode_combiner(RDPQ_COMBINER1((PRIM,0,TEX0,0), (0,0,0,TEX0)));
+
+
+    // Upload texture for the following particles.
+    // The ucode itself never loads or switches any textures,
+    // so you can only use what you have uploaded before in a single draw call.
+    rdpq_texparms_t p = {};
+    p.s.repeats = REPEAT_INFINITE;
+    p.t.repeats = REPEAT_INFINITE;
+    // Texture UVs are internally always mapped to 8x8px tiles across the entire particle.
+    // Even with non-uniform scaling, it is squished into that space.
+    // In order to use differently sized textures (or sections thereof) adjust the scale here.
+    // E.g.: scale_log = 4px=1, 8px=0, 16px=-1, 32px=-2, 64px=-3
+    // This also means that you are limited to power-of-two sizes for a section of a texture.
+    // You can however still have textures with a multiple of a power-of-two size on one axis.
+    int logScale =  - __builtin_ctz(spr_swirl->height / 8);
+    p.s.scale_log = logScale;
+    p.t.scale_log = logScale;
+
+    // For sprite sheets that animate a rotation, we can activate mirroring.
+    // to only require half rotation to be animated.
+    // This works by switching over to the double-mirrored section and repeating the animation,
+    // which is handled internally in the ucode for you if enabled.
+    p.s.mirror = true;
+    p.t.mirror = true;
+    rdpq_sprite_upload(TILE0, spr_swirl, &p);
+
+    tpx_state_from_t3d();
+    
+	t3d_mat4fp_from_srt_euler(&matPartFP[frameIdx],
+		(float[3]){ 3, 3, 3 },
+		(float[3]){ 0.0f, 0.0f, 0.0f },
+		(float[3]){ 0.0f, 500.0f, 0.0f }
+	);
+	tpx_matrix_push(&matPartFP[frameIdx]);
+	
+	float scale = 1.0f / consoles_count;
+    tpx_state_set_scale(scale, scale);
+
+    float tileIdx = fm_floorf(timeTile) * 32;
+    if(tileIdx >= 512)timeTile = 0;
+
+	tpx_state_set_tex_params((int16_t)tileIdx, 8);
+
+    tpx_particle_draw_tex(particles, particleCount);
+
+	tpx_matrix_pop(1);
+	
+	rdpq_mode_pop();
+}
+
 void render_offscreen() {
 	if (game_state == IN_GAME) {
 		for (int i=0; i<consoles_count; i++) {
@@ -602,6 +761,13 @@ void render_3d() {
 					}
 					rspq_block_run(console->displayable->dpl2);
 					rdpq_sync_pipe();
+
+					// TODO Particles
+					if (i == 0) {
+						drawsmoke(console->position);
+					}
+					rdpq_sync_pipe();
+
 					t3d_matrix_pop(2);
   					rdpq_mode_pop();
 					//rdpq_sync_pipe();
@@ -762,6 +928,13 @@ int main(void) {
 
 	frameIdx = 0;
 
+
+	tpx_init((TPXInitParams){});
+	allocSize = sizeof(TPXParticle) * particleCountMax / 2;
+	debugf("allocSize=%d\n", allocSize);
+	particles = malloc_uncached(allocSize);
+	matPartFP = malloc_uncached(sizeof(T3DMat4FP) * FB_COUNT);
+
 	//audio_init(44100, 4);
 	//mixer_init(20);
 
@@ -785,6 +958,8 @@ int main(void) {
     spr_progress = sprite_load("rom:/CircleProgress.i8.sprite");
     spr_circlemask = sprite_load("rom:/CircleMask.i8.sprite");
 
+	spr_swirl = sprite_load("rom://swirl.i4.sprite");
+
 	// Happens only on reset
 	// Load model for each console
 	for (int i=0; i<consoles_count; i++) {
@@ -797,7 +972,7 @@ int main(void) {
 	update();
 	while (true) {
 		frameIdx = (frameIdx + 1) % FB_COUNT;
-		float frametime = display_get_delta_time();
+		frametime = display_get_delta_time();
 		gtime += frametime;
 
 		mixer_try_play();
