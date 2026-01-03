@@ -522,29 +522,12 @@ static void drawprogress(int x, int y, float progress, color_t col)
 }
 
 
-// Fire color: white -> yellow/orange -> red -> black
-static void gradient_fire(uint8_t *color, float t) {
+static void gradient_smoke(uint8_t *color, float t) {
     t = fminf(1.0f, fmaxf(0.0f, t));
-    t = 0.8f - t;
-    t *= t;
-
-    if (t < 0.25f) { // Dark red to bright red
-      color[0] = (uint8_t)(200 * (t / 0.25f)) + 55;
-      color[1] = 0;
-      color[2] = 0;
-    } else if (t < 0.5f) { // Bright red to yellow
-      color[0] = 255;
-      color[1] = (uint8_t)(255 * ((t - 0.25f) / 0.25f));
-      color[2] = 0;
-    } else if (t < 0.75f) { // Yellow to white (optional, if you want a bright white center)
-      color[0] = 255;
-      color[1] = 255;
-      color[2] = (uint8_t)(255 * ((t - 0.5f) / 0.25f));
-    } else { // White to black
-      color[0] = (uint8_t)(255 * (1.0f - (t - 0.75f) / 0.25f));
-      color[1] = (uint8_t)(255 * (1.0f - (t - 0.75f) / 0.25f));
-      color[2] = (uint8_t)(255 * (1.0f - (t - 0.75f) / 0.25f));
-    }
+	// Dark gray to light gray
+	color[0] = (uint8_t)(50 + 100 * t);
+	color[1] = (uint8_t)(50 + 100 * t);
+	color[2] = (uint8_t)(50 + 100 * t);
 }
 
 
@@ -562,7 +545,7 @@ static void simulate_particles_smoke(TPXParticle *particles, uint32_t partCount,
 
     ptPos[0] = posX + (rand() % 16) - 8;
     ptPos[1] = -126;
-    gradient_fire(color, 0);
+    gradient_smoke(color, 0);
     color[3] = ((PhysicalAddr(ptPos) % 8) * 32);
 
     ptPos[2] = posZ + (rand() % 16) - 8;
@@ -572,8 +555,8 @@ static void simulate_particles_smoke(TPXParticle *particles, uint32_t partCount,
 
   // move all up by one unit
   for (int i = 0; i < partCount/2; i++) {
-    gradient_fire(particles[i].colorA, (particles[i].posA[1] + 127) / 150.0f);
-    gradient_fire(particles[i].colorB, (particles[i].posB[1] + 127) / 150.0f);
+    gradient_smoke(particles[i].colorA, (particles[i].posA[1] + 127) / 150.0f);
+    gradient_smoke(particles[i].colorB, (particles[i].posB[1] + 127) / 150.0f);
 
     particles[i].posA[1] += 1;
     particles[i].posB[1] += 1;
