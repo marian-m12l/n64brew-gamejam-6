@@ -11,7 +11,7 @@
 #include "persistence.h"
 
 
-#define FB_COUNT 2
+#define FB_COUNT 3
 #define OFFSCREEN_SIZE 80
 
 T3DViewport viewport;
@@ -31,13 +31,15 @@ static float gtime;
 
 static xm64player_t music;
 
-T3DVec3 offscreenCamPos = {{0, 0.0f, 50.0f}};
-T3DVec3 offscreenCamTarget = {{0, 0.0f, 0}};
-uint8_t offsetColorAmbient[4] = {0xff, 0xff, 0xff, 0xFF};
-float scale = 0.08f;
 
-rspq_block_t* dplBrew;
-T3DMat4FP* mtxBrew;
+static sprite_t* logo_n64;
+static sprite_t* logo_saturn;
+static sprite_t* logo_playstation;
+
+static sprite_t* spr_a;
+static sprite_t* spr_b;
+static sprite_t* spr_progress;
+static sprite_t* spr_circlemask;
 
 
 // TODO Game data structures
@@ -113,8 +115,6 @@ typedef struct {
 	// CRT screen
 	surface_t offscreen_surf;
 	surface_t offscreen_surf_z;
-	T3DViewport offscreen_viewport;
-    T3DMat4FP* offscreen_mat_fp;
 } displayable_t;
 
 typedef struct {
@@ -221,7 +221,7 @@ console_t* add_console() {
 	console->rotation = (T3DVec3){{ 0.0f, 0.0f, 0.0f }};
 	console->position = (T3DVec3){{ -45.0f + 10.f * consoles_count, 30.0f - (rand() % 60), 0.0f }};
 	console->rot_speed = (5.0f - (rand() % 10)) * 0.02f;
-	console->noise_strength = 0.0f * (float)rand()/(float)RAND_MAX;
+	console->noise_strength = 0.5f * (float)rand()/(float)RAND_MAX;
 	console->displayable = &console_displayables[consoles_count];
 	consoles_count++;
 	return console;
@@ -235,9 +235,6 @@ void setup_console(console_t* console) {
 	displayable->bone = t3d_skeleton_find_bone(&displayable->skel, "console");
 	displayable->offscreen_surf = surface_alloc(FMT_RGBA16, OFFSCREEN_SIZE, OFFSCREEN_SIZE);
 	displayable->offscreen_surf_z = surface_alloc(FMT_RGBA16, OFFSCREEN_SIZE, OFFSCREEN_SIZE);
-	displayable->offscreen_viewport = t3d_viewport_create_buffered(FB_COUNT);
-  	t3d_viewport_set_area(&displayable->offscreen_viewport, 0, 0, OFFSCREEN_SIZE, OFFSCREEN_SIZE);
-	displayable->offscreen_mat_fp = malloc_uncached(sizeof(T3DMat4FP) * FB_COUNT);
 	rspq_block_begin();
 		//t3d_matrix_push(&displayable->mat_fp[frameIdx]);
 		// TODO the model uses the prim. color to blend between the offscreen-texture and white-noise
@@ -362,8 +359,6 @@ void clear_level() {
 		t3d_skeleton_destroy(&displayable->skel);
 		surface_free(&displayable->offscreen_surf);
 		surface_free(&displayable->offscreen_surf_z);
-		t3d_viewport_destroy(&displayable->offscreen_viewport);
-		free_uncached(displayable->offscreen_mat_fp);
 		rspq_block_free(displayable->dpl);
 		free_uncached(displayable->mat_fp2);
 		rspq_block_free(displayable->dpl2);
@@ -490,6 +485,27 @@ static void draw_bg(sprite_t* pattern, sprite_t* gradient, float offset) {
   rdpq_mode_pop();
 }
 
+static void drawprogress(int x, int y, float progress, color_t col)
+{
+    rdpq_set_mode_standard();
+    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+    rdpq_mode_combiner(RDPQ_COMBINER2(
+        (TEX1,0,PRIM,0),  (0,0,0,TEX0),
+        (0,0,0,COMBINED), (0,0,0,TEX1)
+    ));
+    rdpq_set_prim_color(col);
+    rdpq_mode_alphacompare((1.0f-progress)*255.0f);
+    rdpq_tex_multi_begin();
+        rdpq_sprite_upload(TILE0, spr_circlemask, NULL);
+        rdpq_sprite_upload(TILE1, spr_progress, NULL);
+    rdpq_tex_multi_end();
+    rdpq_texture_rectangle(TILE0, x, y, x+32, y+32, 0, 0);
+    rdpq_set_mode_standard();
+    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+    rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
+    rdpq_mode_combiner(RDPQ_COMBINER1((TEX0,0,PRIM,0), (TEX0,0,PRIM,0)));
+}
+
 void render_offscreen() {
 	if (game_state == IN_GAME) {
 		for (int i=0; i<consoles_count; i++) {
@@ -497,31 +513,23 @@ void render_offscreen() {
 			// ======== Draw (Offscreen) ======== //
 			// Render the offscreen-scene first, for that we attach the extra buffer instead of the screen one
 			rdpq_attach_clear(&console->displayable->offscreen_surf, &console->displayable->offscreen_surf_z);
-			t3d_frame_start();
-			t3d_viewport_attach(&console->displayable->offscreen_viewport);
-			
+
 			// TODO Draw only for the current console !!
-			if (in_reset) {
+			if (in_reset && current_joypad == i) {
 				// TODO Also remove noise quickly !
 				//draw_bars(TICKS_TO_MS(TICKS_READ()));
 				rdpq_clear(RGBA32(0xff, 0, 0, 0xff));
 			} else {
-				t3d_viewport_set_projection(&console->displayable->offscreen_viewport, T3D_DEG_TO_RAD(85.0f), 20.0f, 160.0f);
-				t3d_viewport_look_at(&console->displayable->offscreen_viewport, &offscreenCamPos, &offscreenCamTarget, &(T3DVec3){{0,1,0}});
-				t3d_viewport_attach(&console->displayable->offscreen_viewport);
-				t3d_light_set_ambient(offsetColorAmbient);
-				t3d_light_set_count(0);
-				
-				t3d_mat4fp_from_srt_euler(&console->displayable->offscreen_mat_fp[frameIdx],
-					(float[3]){scale, scale, scale},
-					(float[3]){0.0f, gtime * (i+1), 0},
-					(float[3]){0, 0, 0}
-				);
-				t3d_matrix_push(&console->displayable->offscreen_mat_fp[frameIdx]);
-				rdpq_debug_log_msg("model_draw_brew");
-				rspq_block_run(dplBrew);
-				t3d_matrix_pop(1);
-				//rdpq_sync_pipe();
+				rdpq_sprite_blit(logo_n64, 0, 0, &(rdpq_blitparms_t) {
+					.scale_x = .5f, .scale_y = .5f,
+				});
+				// TODO Growing attacker logo(s)
+				rdpq_sprite_blit(logo_saturn, 60, 10, &(rdpq_blitparms_t) {
+					.scale_x = .25f, .scale_y = .25f,
+				});
+				rdpq_sprite_blit(logo_playstation, 10, 60, &(rdpq_blitparms_t) {
+					.scale_x = .25f, .scale_y = .25f,
+				});
 			}
 
 			rdpq_detach();
@@ -560,7 +568,6 @@ void render_3d() {
 				t3d_matrix_push(&console->displayable->mat_fp[frameIdx]);
       			t3d_skeleton_use(&console->displayable->skel);
 				//rdpq_set_prim_color(RGBA32(0, 255, 0, 255));
-				rdpq_debug_log_msg("model_draw_crt");
 				rspq_block_run(console->displayable->dpl);
 /*
 				uint8_t blend = (uint8_t)(/*console->noise_strength*//*0 * 255.4f);
@@ -589,7 +596,6 @@ void render_3d() {
 					t3d_matrix_push(&console->displayable->skel.boneMatricesFP[console->displayable->bone]);
 					t3d_matrix_push(&console->displayable->mat_fp2[frameIdx]); // apply local matrix of the model
 					//rdpq_set_prim_color(RGBA32(255, 0, 0, 255));
-					rdpq_debug_log_msg("model_draw_console");
 					//rdpq_sync_pipe();
 					if (current_joypad == i) {
 						rdpq_set_prim_color(RGBA32(0, 200, 0, 255));
@@ -643,6 +649,13 @@ void render_2d() {
 			} else if (wrong_joypads_count) {
 				rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 40, 100, "NO NO, plug a single joypad");
 			}
+			// TODO Draw buttons and progress (screen coords ! or billboard ??)
+			int x = 280, y = 10;
+			drawprogress(x - 8, y - 8, fmodf(gtime, 1.0f), RGBA32(255, 0, 0, 255));
+			rdpq_sprite_blit(spr_a, x, y, NULL);
+			y += 32;
+			drawprogress(x - 8, y - 8, fmodf(gtime+0.3f, 1.0f), RGBA32(255, 0, 0, 255));
+			rdpq_sprite_blit(spr_b, x, y, NULL);
 			break;
 		}
 		case LEVEL_CLEARED:
@@ -762,14 +775,15 @@ int main(void) {
 	
 	bg_pattern = sprite_load("rom:/pattern.i8.sprite");
 	bg_gradient = sprite_load("rom:/gradient.i8.sprite");
-
-	T3DModel *brew = t3d_model_load("rom:/brew_logo.t3dm");
 	
-	rspq_block_begin();
-		t3d_model_draw(brew);
-	dplBrew = rspq_block_end();
+	logo_n64 = sprite_load("rom:/n64.sprite");
+	logo_saturn = sprite_load("rom:/saturn.sprite");
+	logo_playstation = sprite_load("rom:/playstation.sprite");
 
-    //mtxBrew = malloc_uncached(sizeof(T3DMat4FP) * FB_COUNT);
+    spr_a = sprite_load("rom:/AButton.sprite");
+    spr_b = sprite_load("rom:/BButton.sprite");
+    spr_progress = sprite_load("rom:/CircleProgress.i8.sprite");
+    spr_circlemask = sprite_load("rom:/CircleMask.i8.sprite");
 
 	// Happens only on reset
 	// Load model for each console
@@ -833,9 +847,6 @@ int main(void) {
 	//t3d_model_free(model);
 
   	t3d_destroy();
-
-	//surface_free(&offscreenSurf);
-	//surface_free(&offscreenSurfZ);
 
 	display_close();
 	return 0;
