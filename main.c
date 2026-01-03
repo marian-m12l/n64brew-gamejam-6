@@ -14,6 +14,8 @@
 
 #define FB_COUNT 3
 #define OFFSCREEN_SIZE 80
+#define MUSIC_CHANNEL 4
+#define SFX_CHANNEL 0
 
 T3DViewport viewport;
 T3DVec3 camPos = {{ 0.0f, 0.0f, 40.0f }};
@@ -33,6 +35,7 @@ static float frametime;
 static float gtime;
 
 static xm64player_t music;
+static wav64_t sfx_blip;
 
 
 static sprite_t* logo_n64;
@@ -383,6 +386,29 @@ void clear_level() {
 	}
 }
 
+static void stop_music() {
+	if (music.playing) {
+		xm64player_stop(&music);
+		xm64player_close(&music);
+	}
+}
+
+static void play_ingame_music() {
+	stop_music();
+	xm64player_open(&music, "rom:/flyaway.xm64");
+    xm64player_set_loop(&music, true);
+    xm64player_set_vol(&music, 0.55);	// FIXME
+	xm64player_play(&music, MUSIC_CHANNEL);
+}
+
+static void play_menu_music() {
+	stop_music();
+    xm64player_open(&music, "rom:/inmemory.xm64");
+    xm64player_set_loop(&music, true);
+    xm64player_set_vol(&music, 0.55);	// FIXME
+	xm64player_play(&music, MUSIC_CHANNEL);
+}
+
 void update() {
 	// TODO Move camera?
 	t3d_viewport_set_projection(&viewport, T3D_DEG_TO_RAD(85.0f), 10.0f, 150.0f);
@@ -395,6 +421,7 @@ void update() {
 				if (pressed.a || pressed.start) {
 					// Load level 1
 					load_level();
+					play_ingame_music();
 					game_state = IN_GAME;
 				}
 			}
@@ -429,6 +456,8 @@ void update() {
 				game_state = LEVEL_CLEARED;
 				// TODO unload level immediately ?
 				clear_level();
+				play_menu_music();
+				wav64_play(&sfx_blip, SFX_CHANNEL);
 			}
 			break;
 		}
@@ -441,8 +470,10 @@ void update() {
 					current_level++;
 					if (current_level < TOTAL_LEVELS) {
 						load_level();
+						play_ingame_music();
 						game_state = IN_GAME;
 					} else {
+						wav64_play(&sfx_blip, SFX_CHANNEL);
 						game_state = FINISHED;
 					}
 				}
@@ -456,6 +487,7 @@ void update() {
 					// TODO Reinitialize game data
 					current_level = 0;
 					game_state = INTRO;
+					wav64_play(&sfx_blip, SFX_CHANNEL);
 				}
 			}
 			break;
@@ -825,7 +857,7 @@ int main(void) {
 	rdpq_init();
 	joypad_init();
     timer_init();
-    audio_init(32000, 3);
+    audio_init(32000, 4);
     mixer_init(32);
 
 	//rdpq_debug_start();	// TODO Debug only
@@ -877,6 +909,8 @@ int main(void) {
 	} else {
 		// TODO Make sure enough data was recovered: current_level, game_state, ... --> REPLICAS + RESTORE !!
 
+		// TODO Support restarting to level cleared screen ??
+
 		// Restored at least once console: keep playing
 		for (int i=0; i<consoles_count; i++) {
 			console_t* console = &consoles[i];
@@ -920,11 +954,14 @@ int main(void) {
 
 	//audio_init(44100, 4);
 	//mixer_init(20);
+    
+	if (game_state == IN_GAME) {
+		play_ingame_music();
+	} else {
+		play_menu_music();
+	}
 
-    xm64player_open(&music, "rom:/flyaway.xm64");
-    xm64player_set_loop(&music, true);
-    xm64player_set_vol(&music, 0.55);
-    xm64player_play(&music, 0);
+	wav64_open(&sfx_blip, "rom:/blip.wav64");
 
 	console_model = t3d_model_load("rom:/crt.t3dm");
 	n64_model = t3d_model_load("rom:/console.t3dm");
