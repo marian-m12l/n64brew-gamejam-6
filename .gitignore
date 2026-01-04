@@ -2,3 +2,4 @@ build
 *.uf2
 *.z64
 filesystem/
+*.blend1

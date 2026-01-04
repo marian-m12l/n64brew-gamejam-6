@@ -8,7 +8,6 @@
 #include <t3d/tpx.h>
 
 #include "logo.h"
-#include "pc64.h"
 #include "persistence.h"
 
 
