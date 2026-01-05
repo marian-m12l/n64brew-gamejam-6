@@ -531,7 +531,7 @@ static void draw_bg(sprite_t* pattern, sprite_t* gradient, float offset) {
   rdpq_mode_pop();
 }
 
-static void drawprogress(int x, int y, float progress, color_t col)
+static void drawprogress(int x, int y, float scale, float progress, color_t col)
 {
     rdpq_set_mode_standard();
     rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
@@ -545,7 +545,7 @@ static void drawprogress(int x, int y, float progress, color_t col)
         rdpq_sprite_upload(TILE0, spr_circlemask, NULL);
         rdpq_sprite_upload(TILE1, spr_progress, NULL);
     rdpq_tex_multi_end();
-    rdpq_texture_rectangle(TILE0, x, y, x+32, y+32, 0, 0);
+    rdpq_texture_rectangle_scaled(TILE0, x, y, x+(32*scale), y+(32*scale), 0, 0, 32, 32);
     rdpq_set_mode_standard();
     rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
     rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
@@ -831,11 +831,16 @@ void render_2d() {
 			}
 			// TODO Draw buttons and progress (screen coords ! or billboard ??)
 			int x = 280, y = 10;
-			drawprogress(x - 8, y - 8, fmodf(gtime, 1.0f), RGBA32(255, 0, 0, 255));
+			drawprogress(x - 8, y - 8, 1.0f, fmodf(gtime, 1.0f), RGBA32(255, 0, 0, 255));
 			rdpq_sprite_blit(spr_a, x, y, NULL);
 			y += 32;
-			drawprogress(x - 8, y - 8, fmodf(gtime+0.3f, 1.0f), RGBA32(255, 0, 0, 255));
-			rdpq_sprite_blit(spr_b, x, y, NULL);
+			// TODO Resize progress/button sprites ? depending on console scale ??
+			level_t* level = &levels[current_level];
+			float s = powf(0.7f, (level->consoles_count - 1));
+			drawprogress(x - (8*s), y - (8*s), s, fmodf(gtime+0.3f, 1.0f), RGBA32(255, 0, 0, 255));
+			rdpq_sprite_blit(spr_b, x, y, &(rdpq_blitparms_t) {
+				.scale_x = s, .scale_y = s,
+			});
 			break;
 		}
 		case LEVEL_CLEARED:
