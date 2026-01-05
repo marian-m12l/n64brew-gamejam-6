@@ -1,6 +1,6 @@
 TARGET=n64brew-gamejam-6
 BUILD_DIR=build
-N64_ROM_HEADER=ipl3_dev_patched.z64
+N64_ROM_HEADER=ipl3_prod_patched.z64
 include $(N64_INST)/include/n64.mk
 include $(T3D_INST)/t3d.mk
 
