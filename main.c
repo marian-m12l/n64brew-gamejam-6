@@ -52,7 +52,7 @@ static sprite_t* spr_swirl;
 uint32_t particleCountMax = 128;
 uint32_t particleCount;
 uint32_t allocSize;
-TPXParticle* particles;
+TPXParticleS8* particles;
 T3DMat4FP* matPartFP;
 float tpx_time = 0;
 float timeTile = 0;
@@ -567,12 +567,12 @@ static void gradient_smoke(uint8_t *color, float t) {
  * This will simulate particles over time by moving them up and changing their color.
  * The current position is used to spawn new particles, so it can move over time leaving a trail behind.
  */
-static void simulate_particles_smoke(TPXParticle *particles, uint32_t partCount, float posX, float posZ) {
+static void simulate_particles_smoke(TPXParticleS8* particles, uint32_t partCount, float posX, float posZ) {
   int p = currentPart / 2;
   if(currentPart % (1+(rand() % 3)) == 0) {
-    int8_t *ptPos  = tpx_buffer_get_pos(particles, p);
-    int8_t *size   = tpx_buffer_get_size(particles, p);
-    uint8_t *color = tpx_buffer_get_rgba(particles, p);
+    int8_t *ptPos  = tpx_buffer_s8_get_pos(particles, p);
+    int8_t *size   = tpx_buffer_s8_get_size(particles, p);
+    uint8_t *color = tpx_buffer_s8_get_rgba(particles, p);
 
     ptPos[0] = posX + (rand() % 16) - 8;
     ptPos[1] = -126;
@@ -672,7 +672,7 @@ static void drawsmoke(T3DVec3 position) {
 
 	tpx_state_set_tex_params((int16_t)tileIdx, 8);
 
-    tpx_particle_draw_tex(particles, particleCount);
+    tpx_particle_draw_tex_s8(particles, particleCount);
 
 	tpx_matrix_pop(1);
 	
@@ -873,7 +873,7 @@ int main(void) {
     srand(seed);
     register_VI_handler((void(*)(void))rand);
 
-	debugf("Stop N Swop Test ROM\n");
+	debugf("Console War\n");
 
 	reset_type_t rst = sys_reset_type();
 	// TODO Treat separately cold, lukewarm (cold with remaining data in ram), and warm boots
@@ -951,7 +951,7 @@ int main(void) {
 
 
 	tpx_init((TPXInitParams){});
-	allocSize = sizeof(TPXParticle) * particleCountMax / 2;
+	allocSize = sizeof(TPXParticleS8) * particleCountMax / 2;
 	debugf("allocSize=%d\n", allocSize);
 	particles = malloc_uncached(allocSize);
 	matPartFP = malloc_uncached(sizeof(T3DMat4FP) * FB_COUNT);
