@@ -10,6 +10,13 @@
 #include "logo.h"
 #include "persistence.h"
 
+#include "pc64.h"
+
+void debug_uart(char* str) {
+	strcpy(write_buf, str);
+	pc64_uart_write((const uint8_t *)write_buf, strlen(write_buf));
+}
+
 
 #define FB_COUNT 3
 #define OFFSCREEN_SIZE 80
@@ -157,9 +164,11 @@ displayable_t console_displayables[MAX_CONSOLES];
 uint32_t consoles_count = 0;
 int current_joypad = -1;
 uint32_t held_ms;
-bool in_reset;
+volatile bool in_reset;
 bool wrong_joypads_count = false;
 bool paused_wrong_joypads_count = false;
+uint32_t tv_type;
+uint32_t vi_period;
 
 // TODO game_data_t { consoles, level, current screen, counters, ...} --> replicated with highest persistence !!!
 
@@ -172,6 +181,19 @@ volatile uint8_t current_level __attribute__((section(".persistent")));
 volatile uint8_t level_reset_count_per_console[MAX_CONSOLES] __attribute__((section(".persistent")));
 volatile uint8_t level_power_cycle_count __attribute__((section(".persistent")));
 // FIXME Counters will need heavy replication to resist long power-cycles
+
+
+/** @brief VI period for showing one NTSC and MPAL picture in ms. */
+#define VI_PERIOD_NTSC_MPAL                 ((float)1000/60)
+/** @brief VI period for showing one PAL picture in ms. */
+#define VI_PERIOD_PAL                       ((float)1000/50)
+
+static void monitor_reset_grace_period(void) {
+	// If a reset has occured and its the last VI interrupt before RESET_TIME_LENGTH grace period, stop all work and exit
+	if(/*exception_reset_time()*/TICKS_SINCE(0) + vi_period >= RESET_TIME_LENGTH) {
+		die();
+	}
+}
 
 // Callback for NMI/Reset interrupt
 static void reset_interrupt_callback(void) {
@@ -192,6 +214,9 @@ static void reset_interrupt_callback(void) {
 	// TODO Just set hardware counter to 0 now
 	C0_WRITE_COUNT(0);
 	in_reset = true;
+
+	// Register VI handler to shutdown hardware after grace period
+	register_VI_handler((void(*)(void))monitor_reset_grace_period);
 
 	// Measure how long the reset button is held
 	/*while (true) {
@@ -853,6 +878,11 @@ void render_2d() {
 }
 
 int main(void) {
+	strcpy(write_buf, "Hello from the N64!\r\n");
+	pc64_uart_write((const uint8_t *)write_buf, strlen(write_buf));
+
+	debug_uart("================= Hello from the N64 =================\n");
+
 	debug_init_isviewer();
 	debug_init_usblog();
 	asset_init_compression(2);
@@ -864,6 +894,8 @@ int main(void) {
     audio_init(32000, 4);
     mixer_init(32);
 
+	debug_uart("Init OK\n");
+
 	//rdpq_debug_start();	// TODO Debug only
 
     // Initialize the random number generator, then call rand() every
@@ -873,6 +905,12 @@ int main(void) {
     srand(seed);
     register_VI_handler((void(*)(void))rand);
 
+	debug_uart("Seed OK\n");
+
+	tv_type = get_tv_type();
+	vi_period = TICKS_FROM_MS(tv_type == TV_PAL ? VI_PERIOD_PAL : VI_PERIOD_NTSC_MPAL);
+    //register_VI_handler((void(*)(void))monitor_reset_grace_period);
+
 	debugf("Console War\n");
 
 	reset_type_t rst = sys_reset_type();
@@ -880,6 +918,12 @@ int main(void) {
 	debugf("Boot type: %s\n", rst == RESET_COLD ? "COLD" : "WARM");
 	held_ms = (rst == RESET_COLD) ? 0 : TICKS_TO_MS(TICKS_READ());
 	debugf("held_ms = %ld\n", held_ms);
+
+	debug_uart("Boot type OK\n");
+
+	display_init(RESOLUTION_320x240, DEPTH_16_BPP, FB_COUNT, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS);
+
+	debug_uart("Display init OK\n");
 
 	// TODO Skip restoration / force cold boot behaviour by holding R+A during startup ?
 	bool forceColdBoot;
@@ -892,6 +936,8 @@ int main(void) {
 		}
 	}
 
+	debug_uart("Joypad poll OK\n");
+
 	// TODO Also CLEAR the memory heaps ??
 	if (!forceColdBoot) {
 		// Restore game data from heap replicas
@@ -900,7 +946,10 @@ int main(void) {
 		// TODO Clean all variables (held_ms, ...) and memory heaps ?!
 	}
 
+	debug_uart("Restoration OK\n");
+
 	if (consoles_count == 0) {
+		debug_uart("Entering initial boot sequence\n");
 		//n64brew_logo();
 		//libdragon_logo();
 
@@ -910,7 +959,9 @@ int main(void) {
 		wrong_joypads_count_displayed = false;
 		current_level = 0;
 		game_state = INTRO;
+		debug_uart("Cold initial sequence OK\n");
 	} else {
+		debug_uart("Entering followup boot sequence\n");
 		// TODO Make sure enough data was recovered: current_level, game_state, ... --> REPLICAS + RESTORE !!
 
 		// TODO Support restarting to level cleared screen ??
@@ -927,19 +978,23 @@ int main(void) {
 			// Recreate replicas (alternative would be to keep replicas as-is)
 			replicate_console(console);
 		}
+		debug_uart("Consoles restored\n");
 		if (rst == RESET_COLD) {
+			debug_uart("Cold\n");
 			power_cycle_count++;
 			level_power_cycle_count++;
 			// TODO Handle too many power cycles in level --> game over
 		} else {
+			debug_uart("Warm\n");
 			reset_count++;
 			//level_reset_count_per_console++;
 			// Counter was already incremented in reset IRQ handler
 			// TODO Handle too many resets in level --> game over? penalty?
 		}
+		debug_uart("Followup boot sequence OK\n");
 	}
 	
-	display_init(RESOLUTION_320x240, DEPTH_16_BPP, FB_COUNT, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS);
+	//display_init(RESOLUTION_320x240, DEPTH_16_BPP, FB_COUNT, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS);
 
 	t3d_init((T3DInitParams){});
 	viewport = t3d_viewport_create_buffered(FB_COUNT);
@@ -948,6 +1003,8 @@ int main(void) {
 	t3d_vec3_norm(&lightDirVec);
 
 	frameIdx = 0;
+	
+	debug_uart("T3D init OK\n");
 
 
 	tpx_init((TPXInitParams){});
@@ -955,6 +1012,8 @@ int main(void) {
 	debugf("allocSize=%d\n", allocSize);
 	particles = malloc_uncached(allocSize);
 	matPartFP = malloc_uncached(sizeof(T3DMat4FP) * FB_COUNT);
+	
+	debug_uart("TPX init OK\n");
 
 	//audio_init(44100, 4);
 	//mixer_init(20);
@@ -964,6 +1023,8 @@ int main(void) {
 	} else {
 		play_menu_music();
 	}
+	
+	debug_uart("Music playing OK\n");
 
 	wav64_open(&sfx_blip, "rom:/blip.wav64");
 
@@ -983,6 +1044,8 @@ int main(void) {
     spr_circlemask = sprite_load("rom:/CircleMask.i8.sprite");
 
 	spr_swirl = sprite_load("rom://swirl.i4.sprite");
+	
+	debug_uart("Resources load OK\n");
 
 	// Happens only on reset
 	// Load model for each console
@@ -990,11 +1053,20 @@ int main(void) {
 		setup_console(&consoles[i]);
 	}
 	
+	debug_uart("Consoles setup OK\n");
+	
 	// Reset IRQ handler
 	register_RESET_handler(reset_interrupt_callback);
+	
+	debug_uart("NMI handler register OK\n");
 
 	update();
-	while (true) {
+	
+	debug_uart("First update OK\n");
+	
+	debug_uart("Entering main loop\n");
+
+	while (true /*!in_reset*/) {
 		frameIdx = (frameIdx + 1) % FB_COUNT;
 		frametime = display_get_delta_time();
 		gtime += frametime;
@@ -1039,14 +1111,8 @@ int main(void) {
 		render_2d();
 		rdpq_detach_show();
 	}
-
-	// TODO 
-	//rdpq_text_unregister_font(FONT_BILLBOARD);
-    //rdpq_font_free(fontbill);
-	//t3d_model_free(model);
-
-  	t3d_destroy();
-
-	display_close();
+	
+	debug_uart("Out of main loop\n");
+	
 	return 0;
 }
