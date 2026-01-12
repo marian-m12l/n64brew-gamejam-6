@@ -50,6 +50,8 @@ static sprite_t* logo_playstation;
 
 static sprite_t* spr_a;
 static sprite_t* spr_b;
+static sprite_t* spr_c_up;
+static sprite_t* spr_c_down;
 static sprite_t* spr_progress;
 static sprite_t* spr_circlemask;
 
@@ -157,12 +159,49 @@ typedef struct {
 
 #define CONSOLE_PAYLOAD_SIZE (sizeof(console_t)-(sizeof(console_t)-offsetof(console_t, __exclude)))
 
+typedef enum {
+	SATURN = 0,
+	PLAYSTATION
+} rival_t;
+
+#define TOTAL_RIVALS (2)
+
+typedef enum {
+	BTN_A = 0,
+	BTN_B,
+	BTN_C_UP,
+	BTN_C_DOWN,
+} queue_button_t;
+
+#define TOTAL_BUTTONS (4)
+
+#define QUEUE_LENGTH (4)
+
+typedef struct {
+	queue_button_t buttons[QUEUE_LENGTH];
+	uint8_t start;
+	uint8_t end;
+} attack_queue_t;
+
+typedef struct {
+	bool spawned;
+	rival_t rival_type;
+	attack_queue_t queue;
+	uint8_t level;
+	// TODO Vary strength (requires longer buttons presses? attacks faster? ...)
+} attacker_t;
+
 // TODO Static or dynamic allocation ?
+// TODO Dynamic arrays for consoles, attackers, overheat, ...
 console_t consoles[MAX_CONSOLES];
 displayable_t console_displayables[MAX_CONSOLES];
 
+// TODO Need to restore attackers and queues too (but partially ? truncated depending on hold time when using reset ?)
+attacker_t console_attackers[MAX_CONSOLES];
+
 uint32_t consoles_count = 0;
 int current_joypad = -1;
+float holding = 0.0f;
 uint32_t held_ms;
 volatile bool in_reset;
 bool wrong_joypads_count = false;
@@ -310,6 +349,56 @@ void update_console(console_t* console) {
 	update_replicas(console->replicas, console, CONSOLE_PAYLOAD_SIZE, CONSOLE_REPLICAS, true);
 }
 
+void shrink_attacker(int idx) {
+	if (console_attackers[idx].spawned && console_attackers[idx].level > 0) {
+		console_attackers[idx].level--;
+		console_attackers[idx].queue.start = (console_attackers[idx].queue.start + 1) % QUEUE_LENGTH;
+		debugf("shrink %d: level=%d start=%d\n", idx, console_attackers[idx].level, console_attackers[idx].queue.start);
+		if (console_attackers[idx].level == 0) {
+			console_attackers[idx].spawned = false;
+			debugf("shrink %d: despawn\n", idx);
+		}
+	}
+}
+
+void grow_attacker(int idx) {
+	if (console_attackers[idx].spawned && console_attackers[idx].level < QUEUE_LENGTH) {
+		console_attackers[idx].level++;
+		console_attackers[idx].queue.buttons[console_attackers[idx].queue.end] = (rand() % TOTAL_BUTTONS);
+		console_attackers[idx].queue.end = (console_attackers[idx].queue.end + 1) % QUEUE_LENGTH;
+		debugf("grow %d: level=%d end=%d\n", idx, console_attackers[idx].level, console_attackers[idx].queue.end);
+	}
+}
+
+void spawn_attacker(int idx) {
+	console_attackers[idx].spawned = true;
+	console_attackers[idx].rival_type = (rand() % TOTAL_RIVALS);
+	console_attackers[idx].level = 0;
+	console_attackers[idx].queue.start = 0;
+	console_attackers[idx].queue.end = 0;
+	debugf("spawn %d: level=%d start=%d end=%d\n", idx, console_attackers[idx].level, console_attackers[idx].queue.start, console_attackers[idx].queue.end);
+	grow_attacker(idx);
+}
+
+void reset_attacker(int idx) {
+	console_attackers[idx].spawned = false;
+	console_attackers[idx].level = 0;
+	console_attackers[idx].queue.start = 0;
+	console_attackers[idx].queue.end = 0;
+	debugf("reset %d: level=%d start=%d end=%d\n", idx, console_attackers[idx].level, console_attackers[idx].queue.start, console_attackers[idx].queue.end);
+}
+
+queue_button_t get_attacker_button(int idx, int i) {
+	attack_queue_t* queue = &console_attackers[idx].queue;
+	if (queue->start < queue->end) {
+		return queue->buttons[queue->start + i];
+	} else if (i <= (TOTAL_BUTTONS-1-queue->start)) {
+		return queue->buttons[queue->start + i];
+	} else {
+		return queue->buttons[i - (TOTAL_BUTTONS-queue->start)];
+	}
+}
+
 void load_level() {
 	debugf("Loading level %d\n", current_level);
 	level_t* level = &levels[current_level];
@@ -406,6 +495,7 @@ void clear_level() {
 		rspq_block_free(displayable->dpl2);
 		memset(displayable, 0, sizeof(displayable_t));
 		memset(console, 0, sizeof(console_t));
+		reset_attacker(i);
 		consoles_count--;
 	}
 }
@@ -461,13 +551,59 @@ void update() {
 				update_console(console);
 			}*/
 
+			// TODO Spawn attackers depending on rate by level?
+			// TODO Add attacks depending on enamy strength?
+
 			bool cleared = false;
 
 			// Handle inputs
 			if (current_joypad != -1) {
 				joypad_buttons_t pressed = joypad_get_buttons_pressed(current_joypad);
-				if (pressed.a) {
-					// TODO Heal current console
+				attacker_t* attacker = &console_attackers[current_joypad];
+				if (attacker->spawned) {
+					queue_button_t btn = get_attacker_button(current_joypad, 0);
+					joypad_buttons_t down = joypad_get_buttons(current_joypad);
+					bool held;
+					switch (btn) {
+						case BTN_A:
+							held = down.a && !down.b && !down.c_up && !down.c_down;
+							break;
+						case BTN_B:
+							held = down.b && !down.a && !down.c_up && !down.c_down;
+							break;
+						case BTN_C_UP:
+							held = down.c_up && !down.a && !down.b && !down.c_down;
+							break;
+						case BTN_C_DOWN:
+							held = down.c_down && !down.a && !down.b && !down.c_up;
+							break;
+					}
+					if (held) {
+						holding += frametime;
+						if (holding >= 1.0f) {	// TODO Threshold depending on enemy strength
+							shrink_attacker(current_joypad);
+							holding = 0;
+						}
+					} else {
+						holding = 0;
+					}
+				}
+
+				if (pressed.r) {
+					// Spawn random attacker
+					int idx = (rand() % consoles_count);
+					if (!console_attackers[idx].spawned) {
+						spawn_attacker(idx);
+					} else {
+						grow_attacker(idx);
+					}
+				}
+				if (pressed.l) {
+					// Shrink random attacker
+					int idx = (rand() % consoles_count);
+					if (console_attackers[idx].spawned) {
+						shrink_attacker(idx);
+					}
 				}
 				if (pressed.start) {
 					// FIXME remove
@@ -718,16 +854,33 @@ void render_offscreen() {
 				//draw_bars(TICKS_TO_MS(TICKS_READ()));
 				rdpq_clear(RGBA32(0xff, 0, 0, 0xff));
 			} else {
-				rdpq_sprite_blit(logo_n64, 0, 0, &(rdpq_blitparms_t) {
-					.scale_x = .5f, .scale_y = .5f,
-				});
-				// TODO Growing attacker logo(s)
-				rdpq_sprite_blit(logo_saturn, 60, 10, &(rdpq_blitparms_t) {
-					.scale_x = .25f, .scale_y = .25f,
-				});
-				rdpq_sprite_blit(logo_playstation, 10, 60, &(rdpq_blitparms_t) {
-					.scale_x = .25f, .scale_y = .25f,
-				});
+				attacker_t* attacker = &console_attackers[i];
+				int x = 0;
+				int y = 0;
+				float s = 1.0f - (.25f * attacker->level);
+				if (s > 0.0f) {
+					rdpq_sprite_blit(logo_n64, x, y, &(rdpq_blitparms_t) {
+						.scale_x = s, .scale_y = s,
+					});
+				}
+				if (attacker->spawned) {
+					// Draw attacker logo (size grows with attacker level)
+					x = 80 - 20 * attacker->level;
+					y = 80 - 20 * attacker->level;
+					s = .25f * attacker->level;
+					sprite_t* spr;
+					switch (attacker->rival_type) {
+						case SATURN:
+							spr = logo_saturn;
+							break;
+						case PLAYSTATION:
+							spr = logo_playstation;
+							break;
+					}
+					rdpq_sprite_blit(spr, x, y, &(rdpq_blitparms_t) {
+						.scale_x = s, .scale_y = s,
+					});
+				}
 			}
 
 			rdpq_detach();
@@ -767,17 +920,7 @@ void render_3d() {
       			t3d_skeleton_use(&console->displayable->skel);
 				//rdpq_set_prim_color(RGBA32(0, 255, 0, 255));
 				rspq_block_run(console->displayable->dpl);
-/*
-				uint8_t blend = (uint8_t)(/*console->noise_strength*//*0 * 255.4f);
-    	rdpq_set_prim_color(RGBA32(blend, blend, blend, 255 - blend));
-		t3d_model_draw_custom(console->displayable->model, (T3DModelDrawConf){
-			.userData = &console->displayable->offscreen_surf,
-			.dynTextureCb = dynamic_tex_cb,
-			.matrices = console->displayable->skel.bufferCount == 1
-				? console->displayable->skel.boneMatricesFP
-				: (const T3DMat4FP*)t3d_segment_placeholder(T3D_SEGMENT_SKELETON)
-		});
-*/
+				
 				if(console->displayable->bone >= 0) {
 					//rdpq_sync_pipe();
   					rdpq_mode_push();
@@ -854,18 +997,50 @@ void render_2d() {
 			} else if (wrong_joypads_count) {
 				rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 40, 100, "NO NO, plug a single joypad");
 			}
-			// TODO Draw buttons and progress (screen coords ! or billboard ??)
-			int x = 280, y = 10;
-			drawprogress(x - 8, y - 8, 1.0f, fmodf(gtime, 1.0f), RGBA32(255, 0, 0, 255));
-			rdpq_sprite_blit(spr_a, x, y, NULL);
-			y += 32;
-			// TODO Resize progress/button sprites ? depending on console scale ??
-			level_t* level = &levels[current_level];
-			float s = powf(0.7f, (level->consoles_count - 1));
-			drawprogress(x - (8*s), y - (8*s), s, fmodf(gtime+0.3f, 1.0f), RGBA32(255, 0, 0, 255));
-			rdpq_sprite_blit(spr_b, x, y, &(rdpq_blitparms_t) {
-				.scale_x = s, .scale_y = s,
-			});
+
+			for (int i=0; i<consoles_count; i++) {
+				console_t* console = &consoles[i];
+				attacker_t* attacker = &console_attackers[i];
+				if (attacker->spawned) {
+					// Draw queue
+					T3DVec3 billboardPos = (T3DVec3){{
+						console->position.v[0] - 140 * console->scale.x,
+						console->position.v[1] + 270 * console->scale.x,
+						console->position.v[2]
+					}};
+					T3DVec3 billboardScreenPos;
+					t3d_viewport_calc_viewspace_pos(&viewport, &billboardScreenPos, &billboardPos);
+					int x = floorf(billboardScreenPos.v[0]);
+					int y = floorf(billboardScreenPos.v[1]);
+					level_t* level = &levels[current_level];
+					float s = powf(0.7f, (level->consoles_count - 1));
+					for (int j=0; j<attacker->level; j++) {
+						queue_button_t btn = get_attacker_button(i, j);
+						if (i == current_joypad && j == 0) {
+							drawprogress(x - (8*s), y - (8*s), s, holding, RGBA32(255, 0, 0, 255));
+						}
+						sprite_t* spr;
+						switch (btn) {
+							case BTN_A:
+								spr = spr_a;
+								break;
+							case BTN_B:
+								spr = spr_b;
+								break;
+							case BTN_C_UP:
+								spr = spr_c_up;
+								break;
+							case BTN_C_DOWN:
+								spr = spr_c_down;
+								break;
+						}
+						rdpq_sprite_blit(spr, x, y, &(rdpq_blitparms_t) {
+							.scale_x = s, .scale_y = s,
+						});
+						x += 32 / consoles_count;
+					}
+				}
+			}
 			break;
 		}
 		case LEVEL_CLEARED:
@@ -941,6 +1116,7 @@ int main(void) {
 	// TODO Also CLEAR the memory heaps ??
 	if (!forceColdBoot) {
 		// Restore game data from heap replicas
+		// FIXME Restoration is BROKEN
 		consoles_count = restore(&heap1, consoles, CONSOLE_PAYLOAD_SIZE, sizeof(console_t), MAX_CONSOLES, CONSOLE_MAGIC, CONSOLE_MASK);
 	} else {
 		// TODO Clean all variables (held_ms, ...) and memory heaps ?!
@@ -1040,6 +1216,8 @@ int main(void) {
 
     spr_a = sprite_load("rom:/AButton.sprite");
     spr_b = sprite_load("rom:/BButton.sprite");
+    spr_c_up = sprite_load("rom:/CUp.sprite");
+    spr_c_down = sprite_load("rom:/CDown.sprite");
     spr_progress = sprite_load("rom:/CircleProgress.i8.sprite");
     spr_circlemask = sprite_load("rom:/CircleMask.i8.sprite");
 
