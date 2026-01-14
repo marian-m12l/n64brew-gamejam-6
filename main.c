@@ -368,6 +368,11 @@ void update_console(console_t* console) {
 
 void shrink_attacker(int idx) {
 	if (console_attackers[idx].spawned && console_attackers[idx].level > 0) {
+		// If level was QUEUE_LENGTH, avoid immediate reaction
+		if (console_attackers[idx].level == QUEUE_LENGTH) {
+			console_attackers[idx].last_attack = gtime;
+			console_attackers[idx].last_overheat = gtime;
+		}
 		console_attackers[idx].level--;
 		console_attackers[idx].queue.start = (console_attackers[idx].queue.start + 1) % QUEUE_LENGTH;
 		debugf("shrink %d: level=%d start=%d\n", idx, console_attackers[idx].level, console_attackers[idx].queue.start);
@@ -793,10 +798,11 @@ static void drawprogress(int x, int y, float scale, float progress, color_t col)
 }
 
 
-static void gradient_smoke(uint8_t *color, float t) {
+// TODO Change color with overheat level ?! --> more red
+static void gradient_smoke(uint8_t *color, float t, int heat_level) {
     t = fminf(1.0f, fmaxf(0.0f, t));
 	// Dark gray to light gray
-	color[0] = (uint8_t)(50 + 100 * t);
+	color[0] = (uint8_t)(50 * heat_level + 100 * t);
 	color[1] = (uint8_t)(50 + 100 * t);
 	color[2] = (uint8_t)(50 + 100 * t);
 }
@@ -807,7 +813,7 @@ static void gradient_smoke(uint8_t *color, float t) {
  * This will simulate particles over time by moving them up and changing their color.
  * The current position is used to spawn new particles, so it can move over time leaving a trail behind.
  */
-static void simulate_particles_smoke(particles_t* particles, float posX, float posZ) {
+static void simulate_particles_smoke(particles_t* particles, int heat_level, float posX, float posZ) {
   int p = particles->currentPart / 2;
   if(particles->currentPart % (1+(rand() % 3)) == 0) {
     int8_t *ptPos  = tpx_buffer_s8_get_pos(particles->buffer, p);
@@ -816,7 +822,7 @@ static void simulate_particles_smoke(particles_t* particles, float posX, float p
 
     ptPos[0] = posX + (rand() % 16) - 8;
     ptPos[1] = -126;
-    gradient_smoke(color, 0);
+    gradient_smoke(color, 0, heat_level);
     color[3] = ((PhysicalAddr(ptPos) % 8) * 32);
 
     ptPos[2] = posZ + (rand() % 16) - 8;
@@ -826,8 +832,8 @@ static void simulate_particles_smoke(particles_t* particles, float posX, float p
 
   // move all up by one unit
   for (int i = 0; i < particles->particleCount/2; i++) {
-    gradient_smoke(particles->buffer[i].colorA, (particles->buffer[i].posA[1] + 127) / 150.0f);
-    gradient_smoke(particles->buffer[i].colorB, (particles->buffer[i].posB[1] + 127) / 150.0f);
+    gradient_smoke(particles->buffer[i].colorA, (particles->buffer[i].posA[1] + 127) / 150.0f, heat_level);
+    gradient_smoke(particles->buffer[i].colorB, (particles->buffer[i].posB[1] + 127) / 150.0f, heat_level);
 
     particles->buffer[i].posA[1] += 1;
     particles->buffer[i].posB[1] += 1;
@@ -840,18 +846,18 @@ static void simulate_particles_smoke(particles_t* particles, float posX, float p
   }
 }
 
-static void drawsmoke(particles_t* particles, T3DVec3 position, int amount) {
+static void drawsmoke(particles_t* particles, T3DVec3 position, int heat_level) {
 	//particleRot = (T3DVec3){{0,0,0}};
 	particles->tpx_time += frametime * 1.0f;
 	particles->timeTile += frametime * 25.1f;
-	particles->particleCount = 24 * amount;	// TODO Change scale too? FIXME Handle size change ??
+	particles->particleCount = 24 * heat_level;	// TODO Change scale too? FIXME Handle size change ??
 	// FIXME console position !
 	float posX = position.x;// fm_cosf(tpx_time) * 80.0f;
 	float posZ = position.z;//fm_sinf(2*tpx_time) * 40.0f;
 
 	rdpq_mode_push();
 
-	simulate_particles_smoke(particles, posX, posZ);
+	simulate_particles_smoke(particles, heat_level, posX, posZ);
 	//particleMatScale = (T3DVec3){{0.9f, partMatScaleVal, 0.9f}};
 	//particlePos.y = partMatScaleVal * 130.0f;
 	rdpq_set_env_color((color_t){0xFF, 0xFF, 0xFF, 0xFF});
@@ -904,7 +910,7 @@ static void drawsmoke(particles_t* particles, T3DVec3 position, int amount) {
 	);
 	tpx_matrix_push(&particles->mat_fp[frameIdx]);
 	
-	float scale = 0.5f * amount / consoles_count;
+	float scale = 0.5f * heat_level / consoles_count;
     tpx_state_set_scale(scale, scale);
 
     float tileIdx = fm_floorf(particles->timeTile) * 32;
