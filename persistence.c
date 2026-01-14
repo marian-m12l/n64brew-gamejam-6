@@ -117,13 +117,15 @@ void update_replicas(void** addresses, void* data, int len, int replicas, bool f
 void erase_and_free_replicas(heap_t* heap, void** addresses, int replicas) {
     for (int i=0; i<replicas; i++) {
 		uint8_t* ptr = addresses[i];
-		memset(ptr, 0, CHUNK_SIZE);
-		// Flush cache to RDRAM
-		if (((uintptr_t) ptr & 0x80000000) == 0x80000000) {
-			data_cache_hit_writeback(ptr, CHUNK_SIZE);
-			inst_cache_hit_invalidate(ptr, CHUNK_SIZE);
+		if (ptr != NULL) {
+			memset(ptr, 0, CHUNK_SIZE);
+			// Flush cache to RDRAM
+			if (((uintptr_t) ptr & 0x80000000) == 0x80000000) {
+				data_cache_hit_writeback(ptr, CHUNK_SIZE);
+				inst_cache_hit_invalidate(ptr, CHUNK_SIZE);
+			}
+			free_heap(heap, ptr);
 		}
-		free_heap(heap, ptr);
 	}
 }
 
