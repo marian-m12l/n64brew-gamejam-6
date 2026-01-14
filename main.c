@@ -108,16 +108,17 @@ typedef enum {
 
 typedef struct {
 	uint8_t consoles_count;
-	uint8_t attack_rate;
+	uint16_t attack_rate;
+	float attack_grace_pediod;
 	uint8_t max_resets_per_console;
 	uint8_t max_power_cycles;
 } level_t;
 
 level_t levels[TOTAL_LEVELS] = {
-	{ 1, 1, 2, 2 },
-	{ 2, 3, 2, 1 },
-	{ 3, 4, 1, 1 },
-	{ 4, 5, 1, 1 }
+	{ 1, 9900, 1.0f, 2, 2 },
+	{ 2, 9900, 1.0f, 2, 1 },
+	{ 3, 9800, 0.8f, 1, 1 },
+	{ 4, 9800, 0.8f, 1, 1 }
 };
 
 #define CONSOLE_MAGIC (0x11223300)
@@ -188,6 +189,7 @@ typedef struct {
 	rival_t rival_type;
 	attack_queue_t queue;
 	uint8_t level;
+	float last_attack;
 	// TODO Vary strength (requires longer buttons presses? attacks faster? ...)
 } attacker_t;
 
@@ -366,6 +368,7 @@ void grow_attacker(int idx) {
 		console_attackers[idx].level++;
 		console_attackers[idx].queue.buttons[console_attackers[idx].queue.end] = (rand() % TOTAL_BUTTONS);
 		console_attackers[idx].queue.end = (console_attackers[idx].queue.end + 1) % QUEUE_LENGTH;
+		console_attackers[idx].last_attack = gtime;
 		debugf("grow %d: level=%d end=%d\n", idx, console_attackers[idx].level, console_attackers[idx].queue.end);
 	}
 }
@@ -374,6 +377,7 @@ void spawn_attacker(int idx) {
 	console_attackers[idx].spawned = true;
 	console_attackers[idx].rival_type = (rand() % TOTAL_RIVALS);
 	console_attackers[idx].level = 0;
+	console_attackers[idx].last_attack = 0.0f;
 	console_attackers[idx].queue.start = 0;
 	console_attackers[idx].queue.end = 0;
 	debugf("spawn %d: level=%d start=%d end=%d\n", idx, console_attackers[idx].level, console_attackers[idx].queue.start, console_attackers[idx].queue.end);
@@ -383,6 +387,7 @@ void spawn_attacker(int idx) {
 void reset_attacker(int idx) {
 	console_attackers[idx].spawned = false;
 	console_attackers[idx].level = 0;
+	console_attackers[idx].last_attack = 0.0f;
 	console_attackers[idx].queue.start = 0;
 	console_attackers[idx].queue.end = 0;
 	debugf("reset %d: level=%d start=%d end=%d\n", idx, console_attackers[idx].level, console_attackers[idx].queue.start, console_attackers[idx].queue.end);
@@ -542,6 +547,7 @@ void update() {
 			break;
 		}
 		case IN_GAME: {
+			// TODO Play model animation --> shake when attacked ? shaking grows with attacker level?
 			// Move models TODO
 			/*for (int i=0; i<consoles_count; i++) {
 				console_t* console = &consoles[i];
@@ -551,8 +557,19 @@ void update() {
 				update_console(console);
 			}*/
 
-			// TODO Spawn attackers depending on rate by level?
-			// TODO Add attacks depending on enamy strength?
+			// Spawn attackers and add attacks
+			level_t* level = &levels[current_level];
+			for (int i=0; i<consoles_count; i++) {
+				console_t* console = &consoles[i];
+				if ((rand() % 10000) > level->attack_rate) {
+					attacker_t* attacker = &console_attackers[i];
+					if (!attacker->spawned) {
+						spawn_attacker(i);
+					} else if (attacker->last_attack + level->attack_grace_pediod <= gtime) {
+						grow_attacker(i);
+					}
+				}
+			}
 
 			bool cleared = false;
 
@@ -1053,13 +1070,21 @@ void render_2d() {
 }
 
 int main(void) {
-	strcpy(write_buf, "Hello from the N64!\r\n");
-	pc64_uart_write((const uint8_t *)write_buf, strlen(write_buf));
+	held_ms = TICKS_TO_MS(TICKS_READ());
+	reset_type_t rst = sys_reset_type();
+	// TODO Treat separately cold, lukewarm (cold with remaining data in ram), and warm boots
+	if (rst == RESET_COLD) {
+		held_ms = 0;
+	}
 
 	debug_uart("================= Hello from the N64 =================\n");
 
 	debug_init_isviewer();
 	debug_init_usblog();
+
+	debugf("Boot type: %s\n", rst == RESET_COLD ? "COLD" : "WARM");
+	debugf("held_ms = %ld\n", held_ms);
+
 	asset_init_compression(2);
     wav64_init_compression(3);
 	dfs_init(DFS_DEFAULT_LOCATION);
@@ -1087,12 +1112,6 @@ int main(void) {
     //register_VI_handler((void(*)(void))monitor_reset_grace_period);
 
 	debugf("Console War\n");
-
-	reset_type_t rst = sys_reset_type();
-	// TODO Treat separately cold, lukewarm (cold with remaining data in ram), and warm boots
-	debugf("Boot type: %s\n", rst == RESET_COLD ? "COLD" : "WARM");
-	held_ms = (rst == RESET_COLD) ? 0 : TICKS_TO_MS(TICKS_READ());
-	debugf("held_ms = %ld\n", held_ms);
 
 	debug_uart("Boot type OK\n");
 
