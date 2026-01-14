@@ -16,6 +16,7 @@ assets_png = $(wildcard assets/*.png)
 assets_gltf = $(wildcard assets/*.glb)
 assets_mp3 = $(wildcard assets/*.mp3)
 assets_xm = $(wildcard assets/*.xm)
+assets_ttf = $(wildcard assets/*.ttf)
 assets_conv = $(addprefix filesystem/,$(notdir $(assets_png:%.png=%.sprite))) \
 			  $(addprefix filesystem/,$(notdir $(assets_ttf:%.ttf=%.font64))) \
 			  $(addprefix filesystem/,$(notdir $(assets_gltf:%.glb=%.t3dm))) \

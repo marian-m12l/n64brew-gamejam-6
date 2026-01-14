@@ -25,7 +25,7 @@ void debug_uart(char* str) {
 #define FONT_HALODEK 2
 
 T3DViewport viewport;
-T3DVec3 camPos = {{ 0.0f, 0.0f, 40.0f }};
+T3DVec3 camPos = {{ 0.0f, 10.0f, 60.0f }};
 T3DVec3 camTarget = {{0,0,0}};
 uint8_t colorAmbient[4] = {80, 80, 100, 0xFF};
 uint8_t colorDir[4]     = {0xEE, 0xAA, 0xAA, 0xFF};
@@ -59,17 +59,6 @@ static sprite_t* spr_circlemask;
 static sprite_t* spr_swirl;
 
 static rdpq_font_t *font_halo_dek;
-
-// TODO One particle system PER CONSOLE
-uint32_t particleCountMax = 128;
-uint32_t particleCount;
-uint32_t allocSize;
-TPXParticleS8* particles;
-T3DMat4FP* matPartFP;
-float tpx_time = 0;
-float timeTile = 0;
-
-static int currentPart  = 0;
 
 // TODO Game data structures
 
@@ -113,16 +102,17 @@ typedef struct {
 	uint8_t consoles_count;
 	uint16_t attack_rate;
 	float attack_grace_pediod;
+	float overheat_pediod;
 	uint8_t max_resets_per_console;
 	uint8_t max_power_cycles;
 	uint8_t duration;
 } level_t;
 
 level_t levels[TOTAL_LEVELS] = {
-	{ 1, 9900, 1.0f, 2, 2, 20 },
-	{ 2, 9900, 1.0f, 2, 1, 30 },
-	{ 3, 9800, 0.8f, 1, 1, 45 },
-	{ 4, 9800, 0.8f, 1, 1, 60 }
+	{ 1, 9900, 1.0f, 8.0f, 2, 2, 20 },
+	{ 2, 9900, 1.0f, 8.0f, 2, 1, 30 },
+	{ 3, 9800, 0.8f, 6.0f, 1, 1, 45 },
+	{ 4, 9800, 0.8f, 6.0f, 1, 1, 60 }
 };
 
 #define CONSOLE_MAGIC (0x11223300)
@@ -154,7 +144,6 @@ typedef struct {
     T3DVec3 rotation;
     T3DVec3 position;
 	float rot_speed;
-	float noise_strength;
 	// TODO T3DSkeleton, T3DAnim, wav64_t, c2AABB, ...
 	// Exclude remaining fields from replication
 	char __exclude;
@@ -194,6 +183,8 @@ typedef struct {
 	attack_queue_t queue;
 	uint8_t level;
 	float last_attack;
+	int overheat_level;
+	float last_overheat;
 	// TODO Vary strength (requires longer buttons presses? attacks faster? ...)
 } attacker_t;
 
@@ -204,6 +195,19 @@ displayable_t console_displayables[MAX_CONSOLES];
 
 // TODO Need to restore attackers and queues too (but partially ? truncated depending on hold time when using reset ?)
 attacker_t console_attackers[MAX_CONSOLES];
+
+
+// One particle system per console
+uint32_t particleCountMax = 72;
+typedef struct {
+	uint32_t particleCount;
+	TPXParticleS8* buffer;
+	T3DMat4FP* mat_fp;
+	float tpx_time;
+	float timeTile;
+	int currentPart;
+} particles_t;
+static particles_t console_particles[MAX_CONSOLES];
 
 uint32_t consoles_count = 0;
 int current_joypad = -1;
@@ -227,6 +231,7 @@ volatile uint8_t level_reset_count_per_console[MAX_CONSOLES] __attribute__((sect
 volatile uint8_t level_power_cycle_count __attribute__((section(".persistent")));
 // FIXME Counters will need heavy replication to resist long power-cycles
 volatile float level_timer __attribute__((section(".persistent")));
+volatile int reset_console __attribute__((section(".persistent")));
 
 
 /** @brief VI period for showing one NTSC and MPAL picture in ms. */
@@ -260,6 +265,7 @@ static void reset_interrupt_callback(void) {
 	// TODO Just set hardware counter to 0 now
 	C0_WRITE_COUNT(0);
 	in_reset = true;
+	reset_console = current_joypad;
 
 	// Register VI handler to shutdown hardware after grace period
 	register_VI_handler((void(*)(void))monitor_reset_grace_period);
@@ -309,13 +315,12 @@ console_t* add_console() {
 	console->rotation = (T3DVec3){{ 0.0f, 0.0f, 0.0f }};
 	console->position = (T3DVec3){{ -45.0f + 10.f * consoles_count, 30.0f - (rand() % 60), 0.0f }};
 	console->rot_speed = (5.0f - (rand() % 10)) * 0.02f;
-	console->noise_strength = 0.5f * (float)rand()/(float)RAND_MAX;
 	console->displayable = &console_displayables[consoles_count];
 	consoles_count++;
 	return console;
 }
 
-void setup_console(console_t* console) {
+void setup_console(int i, console_t* console) {
 	displayable_t* displayable = console->displayable;
 	displayable->model = console_model;	//t3d_model_load("rom:/crt.t3dm");	//console_model; // TODO FREE
 	displayable->mat_fp = malloc_uncached(sizeof(T3DMat4FP) * FB_COUNT);
@@ -326,8 +331,6 @@ void setup_console(console_t* console) {
 	rspq_block_begin();
 		//t3d_matrix_push(&displayable->mat_fp[frameIdx]);
 		// TODO the model uses the prim. color to blend between the offscreen-texture and white-noise
-		uint8_t blend = (uint8_t)(console->noise_strength * 255.4f);
-    	rdpq_set_prim_color(RGBA32(blend, blend, blend, 255 - blend));
 		t3d_model_draw_custom(displayable->model, (T3DModelDrawConf){
 			.userData = &displayable->offscreen_surf,
 			.dynTextureCb = dynamic_tex_cb,
@@ -343,6 +346,13 @@ void setup_console(console_t* console) {
 	rspq_block_begin();
 		t3d_model_draw(displayable->model2);
 	displayable->dpl2 = rspq_block_end();
+	// Particles
+	particles_t* particles = &console_particles[i];
+	uint32_t allocSize = sizeof(TPXParticleS8) * particleCountMax / 2;
+	debugf("allocSize=%d\n", allocSize);
+	particles->buffer = malloc_uncached(allocSize);	// TODO memset to 0 ??
+	memset(particles->buffer, 0, allocSize);
+	particles->mat_fp = malloc_uncached(sizeof(T3DMat4FP) * FB_COUNT);
 }
 
 void replicate_console(console_t* console) {
@@ -374,6 +384,7 @@ void grow_attacker(int idx) {
 		console_attackers[idx].queue.buttons[console_attackers[idx].queue.end] = (rand() % TOTAL_BUTTONS);
 		console_attackers[idx].queue.end = (console_attackers[idx].queue.end + 1) % QUEUE_LENGTH;
 		console_attackers[idx].last_attack = gtime;
+		console_attackers[idx].last_overheat = gtime;
 		debugf("grow %d: level=%d end=%d\n", idx, console_attackers[idx].level, console_attackers[idx].queue.end);
 	}
 }
@@ -393,9 +404,32 @@ void reset_attacker(int idx) {
 	console_attackers[idx].spawned = false;
 	console_attackers[idx].level = 0;
 	console_attackers[idx].last_attack = 0.0f;
+	console_attackers[idx].overheat_level = 0;
+	console_attackers[idx].last_overheat = 0.0f;
 	console_attackers[idx].queue.start = 0;
 	console_attackers[idx].queue.end = 0;
 	debugf("reset %d: level=%d start=%d end=%d\n", idx, console_attackers[idx].level, console_attackers[idx].queue.start, console_attackers[idx].queue.end);
+}
+
+void increase_overheat(int idx) {
+	if (console_attackers[idx].spawned && console_attackers[idx].level == QUEUE_LENGTH) {
+		console_attackers[idx].overheat_level++;
+		console_attackers[idx].last_overheat = gtime;
+		debugf("increase heat %d: level=%d\n", idx, console_attackers[idx].overheat_level);
+		// TODO Game over if reached level 4 ?
+		if (console_attackers[idx].overheat_level > 3) {
+			debugf("GAME OVER %d\n", idx);
+			console_attackers[idx].overheat_level = 3;	// TODO To avoid crashing particles
+		}
+	}
+}
+
+void decrease_overheat(int idx) {
+	if (console_attackers[idx].spawned && console_attackers[idx].overheat_level > 0) {
+		console_attackers[idx].overheat_level--;
+		console_attackers[idx].last_overheat = gtime;	// To avoid immediate increase (TODO Add grace period of a few additional seconds?)
+		debugf("decrease heat %d: level=%d\n", idx, console_attackers[idx].overheat_level);
+	}
 }
 
 queue_button_t get_attacker_button(int idx, int i) {
@@ -417,7 +451,7 @@ void load_level() {
 	for (int i=0; i<level->consoles_count; i++) {
 		console_t* console = add_console();
 		replicate_console(console);
-		setup_console(console);
+		setup_console(i, console);
 		// Position consoles
 		float scale = 0.18f * powf(0.7f, level->consoles_count);
 		float x_offset = 20.0f;
@@ -506,6 +540,10 @@ void clear_level() {
 		rspq_block_free(displayable->dpl2);
 		memset(displayable, 0, sizeof(displayable_t));
 		memset(console, 0, sizeof(console_t));
+		particles_t* particles = &console_particles[i];
+		free_uncached(particles->buffer);
+		free_uncached(particles->mat_fp);
+		memset(particles, 0, sizeof(particles_t));
 		reset_attacker(i);
 		consoles_count--;
 	}
@@ -570,14 +608,18 @@ void update() {
 			level_t* level = &levels[current_level];
 			for (int i=0; i<consoles_count; i++) {
 				console_t* console = &consoles[i];
+				attacker_t* attacker = &console_attackers[i];
 				if ((rand() % 10000) > level->attack_rate) {
-					attacker_t* attacker = &console_attackers[i];
 					if (!attacker->spawned) {
 						spawn_attacker(i);
 					} else if (attacker->last_attack + level->attack_grace_pediod <= gtime) {
 						grow_attacker(i);
 					}
 				}
+				if (attacker->spawned && attacker->level == QUEUE_LENGTH && attacker->last_overheat + level->overheat_pediod <= gtime) {
+					increase_overheat(i);
+				}
+				// TODO Decrease current console's heat on reset (the one that was selected when pressing reset!)
 			}
 
 			// Handle inputs
@@ -614,8 +656,8 @@ void update() {
 				}
 
 				if (pressed.r) {
-					// Spawn random attacker
-					int idx = (rand() % consoles_count);
+					// Spawn attacker
+					int idx = current_joypad;
 					if (!console_attackers[idx].spawned) {
 						spawn_attacker(idx);
 					} else {
@@ -623,10 +665,22 @@ void update() {
 					}
 				}
 				if (pressed.l) {
-					// Shrink random attacker
-					int idx = (rand() % consoles_count);
+					// Shrink attacker
+					int idx = current_joypad;
 					if (console_attackers[idx].spawned) {
 						shrink_attacker(idx);
+					}
+				}
+				if (pressed.d_up) {
+					// Increase heat
+					int idx = current_joypad;
+					increase_overheat(idx);
+				}
+				if (pressed.d_down) {
+					// Decrease heat
+					int idx = current_joypad;
+					if (console_attackers[idx].overheat_level > 0) {
+						decrease_overheat(idx);
 					}
 				}
 				if (pressed.start) {
@@ -753,12 +807,12 @@ static void gradient_smoke(uint8_t *color, float t) {
  * This will simulate particles over time by moving them up and changing their color.
  * The current position is used to spawn new particles, so it can move over time leaving a trail behind.
  */
-static void simulate_particles_smoke(TPXParticleS8* particles, uint32_t partCount, float posX, float posZ) {
-  int p = currentPart / 2;
-  if(currentPart % (1+(rand() % 3)) == 0) {
-    int8_t *ptPos  = tpx_buffer_s8_get_pos(particles, p);
-    int8_t *size   = tpx_buffer_s8_get_size(particles, p);
-    uint8_t *color = tpx_buffer_s8_get_rgba(particles, p);
+static void simulate_particles_smoke(particles_t* particles, float posX, float posZ) {
+  int p = particles->currentPart / 2;
+  if(particles->currentPart % (1+(rand() % 3)) == 0) {
+    int8_t *ptPos  = tpx_buffer_s8_get_pos(particles->buffer, p);
+    int8_t *size   = tpx_buffer_s8_get_size(particles->buffer, p);
+    uint8_t *color = tpx_buffer_s8_get_rgba(particles->buffer, p);
 
     ptPos[0] = posX + (rand() % 16) - 8;
     ptPos[1] = -126;
@@ -768,36 +822,36 @@ static void simulate_particles_smoke(TPXParticleS8* particles, uint32_t partCoun
     ptPos[2] = posZ + (rand() % 16) - 8;
     *size = 60 + (rand() % 10);
   }
-  currentPart = (currentPart + 1) % partCount;
+  particles->currentPart = (particles->currentPart + 1) % particles->particleCount;
 
   // move all up by one unit
-  for (int i = 0; i < partCount/2; i++) {
-    gradient_smoke(particles[i].colorA, (particles[i].posA[1] + 127) / 150.0f);
-    gradient_smoke(particles[i].colorB, (particles[i].posB[1] + 127) / 150.0f);
+  for (int i = 0; i < particles->particleCount/2; i++) {
+    gradient_smoke(particles->buffer[i].colorA, (particles->buffer[i].posA[1] + 127) / 150.0f);
+    gradient_smoke(particles->buffer[i].colorB, (particles->buffer[i].posB[1] + 127) / 150.0f);
 
-    particles[i].posA[1] += 1;
-    particles[i].posB[1] += 1;
-    if(currentPart % 4 == 0) {
-      particles[i].sizeA -= 2;
-      particles[i].sizeB -= 2;
-      if(particles[i].sizeA < 0)particles[i].sizeA = 0;
-      if(particles[i].sizeB < 0)particles[i].sizeB = 0;
+    particles->buffer[i].posA[1] += 1;
+    particles->buffer[i].posB[1] += 1;
+    if(particles->currentPart % 4 == 0) {
+      particles->buffer[i].sizeA -= 2;
+      particles->buffer[i].sizeB -= 2;
+      if(particles->buffer[i].sizeA < 0)	particles->buffer[i].sizeA = 0;
+      if(particles->buffer[i].sizeB < 0)	particles->buffer[i].sizeB = 0;
     }
   }
 }
 
-static void drawsmoke(T3DVec3 position) {
+static void drawsmoke(particles_t* particles, T3DVec3 position, int amount) {
 	//particleRot = (T3DVec3){{0,0,0}};
-	tpx_time += frametime * 1.0f;
-	timeTile += frametime * 25.1f;
-	particleCount = 128;
+	particles->tpx_time += frametime * 1.0f;
+	particles->timeTile += frametime * 25.1f;
+	particles->particleCount = 24 * amount;	// TODO Change scale too? FIXME Handle size change ??
 	// FIXME console position !
 	float posX = position.x;// fm_cosf(tpx_time) * 80.0f;
 	float posZ = position.z;//fm_sinf(2*tpx_time) * 40.0f;
 
 	rdpq_mode_push();
 
-	simulate_particles_smoke(particles, particleCount, posX, posZ);
+	simulate_particles_smoke(particles, posX, posZ);
 	//particleMatScale = (T3DVec3){{0.9f, partMatScaleVal, 0.9f}};
 	//particlePos.y = partMatScaleVal * 130.0f;
 	rdpq_set_env_color((color_t){0xFF, 0xFF, 0xFF, 0xFF});
@@ -843,22 +897,22 @@ static void drawsmoke(T3DVec3 position) {
 
     tpx_state_from_t3d();
     
-	t3d_mat4fp_from_srt_euler(&matPartFP[frameIdx],
+	t3d_mat4fp_from_srt_euler(&particles->mat_fp[frameIdx],
 		(float[3]){ 3, 3, 3 },
 		(float[3]){ 0.0f, 0.0f, 0.0f },
 		(float[3]){ 0.0f, 500.0f, 0.0f }
 	);
-	tpx_matrix_push(&matPartFP[frameIdx]);
+	tpx_matrix_push(&particles->mat_fp[frameIdx]);
 	
-	float scale = 1.0f / consoles_count;
+	float scale = 0.5f * amount / consoles_count;
     tpx_state_set_scale(scale, scale);
 
-    float tileIdx = fm_floorf(timeTile) * 32;
-    if(tileIdx >= 512)timeTile = 0;
+    float tileIdx = fm_floorf(particles->timeTile) * 32;
+    if(tileIdx >= 512)	particles->timeTile = 0;
 
 	tpx_state_set_tex_params((int16_t)tileIdx, 8);
 
-    tpx_particle_draw_tex_s8(particles, particleCount);
+    tpx_particle_draw_tex_s8(particles->buffer, particles->particleCount);
 
 	tpx_matrix_pop(1);
 	
@@ -944,6 +998,11 @@ void render_3d() {
 				t3d_matrix_push(&console->displayable->mat_fp[frameIdx]);
       			t3d_skeleton_use(&console->displayable->skel);
 				//rdpq_set_prim_color(RGBA32(0, 255, 0, 255));
+
+				attacker_t* attacker = &console_attackers[i];
+				float noise_strength = 0.2f * (1 + attacker->overheat_level);
+				uint8_t blend = (uint8_t)(noise_strength * 255.4f);
+    			rdpq_set_prim_color(RGBA32(blend, blend, blend, 255 - blend));
 				rspq_block_run(console->displayable->dpl);
 				
 				if(console->displayable->bone >= 0) {
@@ -969,9 +1028,9 @@ void render_3d() {
 					rspq_block_run(console->displayable->dpl2);
 					rdpq_sync_pipe();
 
-					// TODO Particles
-					if (i == 0) {
-						drawsmoke(console->position);
+					// Particles
+					if (attacker->overheat_level > 0) {
+						drawsmoke(&console_particles[i], console->position, attacker->overheat_level);
 					}
 					rdpq_sync_pipe();
 
@@ -1181,8 +1240,15 @@ int main(void) {
 			debugf("rotation: %f %f %f\n", console->rotation.x, console->rotation.y, console->rotation.z);
 			debugf("position: %f %f %f\n", console->position.x, console->position.y, console->position.z);
 			debugf("rot_speed: %f\n", console->rot_speed);
-			debugf("noise_strength: %f\n", console->noise_strength);
 			console->displayable = &console_displayables[i];
+			// TODO Decrease overheat level of console depending on held_ms
+			// FIXME Attackers are not restored yet...
+			if (console_attackers[i].overheat_level > 0) {
+				decrease_overheat(i);
+				if (held_ms > 5000) {
+					decrease_overheat(i);
+				}
+			}
 			// Recreate replicas (alternative would be to keep replicas as-is)
 			replicate_console(console);
 		}
@@ -1216,10 +1282,6 @@ int main(void) {
 
 
 	tpx_init((TPXInitParams){});
-	allocSize = sizeof(TPXParticleS8) * particleCountMax / 2;
-	debugf("allocSize=%d\n", allocSize);
-	particles = malloc_uncached(allocSize);
-	matPartFP = malloc_uncached(sizeof(T3DMat4FP) * FB_COUNT);
 	
 	debug_uart("TPX init OK\n");
 
@@ -1264,7 +1326,7 @@ int main(void) {
 	// Happens only on reset
 	// Load model for each console
 	for (int i=0; i<consoles_count; i++) {
-		setup_console(&consoles[i]);
+		setup_console(i, &consoles[i]);
 	}
 	
 	debug_uart("Consoles setup OK\n");
