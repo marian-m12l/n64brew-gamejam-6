@@ -119,7 +119,7 @@ const level_t levels[TOTAL_LEVELS] = {
 #define CONSOLE_MASK (0xffffff00)
 
 #define MAX_CONSOLES (4)
-#define CONSOLE_REPLICAS (4)
+#define CONSOLE_REPLICAS (10)
 
 // Struct to hold runtime stuff (model, display list, ...)
 typedef struct {
@@ -157,7 +157,7 @@ typedef struct {
 
 #define ATTACKER_MAGIC (0x44556600)
 #define ATTACKER_MASK (0xffffff00)
-#define ATTACKER_REPLICAS (4)
+#define ATTACKER_REPLICAS (10)
 
 typedef enum {
 	SATURN = 0,
@@ -202,7 +202,7 @@ typedef struct {
 
 #define OVERHEAT_MAGIC (0x77889900)
 #define OVERHEAT_MASK (0xffffff00)
-#define OVERHEAT_REPLICAS (4)
+#define OVERHEAT_REPLICAS (10)
 
 typedef struct {
 	uint32_t id;
@@ -242,6 +242,7 @@ uint32_t consoles_count = 0;
 int current_joypad = -1;
 float holding = 0.0f;
 uint32_t held_ms;
+reset_type_t rst;
 volatile bool in_reset;
 bool wrong_joypads_count = false;
 bool paused_wrong_joypads_count = false;
@@ -1164,6 +1165,8 @@ void render_2d() {
 	if (heap_size > 4*1024*1024) {
 		heap_size -= 4*1024*1024;
 	}
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 160, "Reset console : %ld", reset_console);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 170, "    Boot type : %s", rst == RESET_COLD ? "COLD" : "WARM");
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 180, "     Restored : %ld/%ld/%ld", restored_consoles_count, restored_attackers_count, restored_overheat_count);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 190, "       Resets : %ld/%d-%d-%d-%d", reset_count, level_reset_count_per_console[0], level_reset_count_per_console[1], level_reset_count_per_console[2], level_reset_count_per_console[3]);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 200, " Power cycles : %ld/%d", power_cycle_count, level_power_cycle_count);
@@ -1250,7 +1253,7 @@ void render_2d() {
 
 int main(void) {
 	held_ms = TICKS_TO_MS(TICKS_READ());
-	reset_type_t rst = sys_reset_type();
+	rst = sys_reset_type();
 	// TODO Treat separately cold, lukewarm (cold with remaining data in ram), and warm boots
 	if (rst == RESET_COLD) {
 		held_ms = 0;
@@ -1395,7 +1398,7 @@ int main(void) {
 			replicate_overheat(overheat);
 			
 			// TODO Decrease overheat level of console depending on held_ms
-			if (rst == RESET_COLD && overheat->id == reset_console && overheat->overheat_level > 0) {
+			if (/*rst == RESET_WARM && */overheat->id == reset_console && overheat->overheat_level > 0) {
 				debugf("DECREASE overheat of RESET CONSOLE: %d\n", overheat->id);
 				decrease_overheat(id);
 				if (held_ms >= 5000) {
@@ -1405,7 +1408,7 @@ int main(void) {
 			}
 		}
 
-
+		reset_console = -1;
 
 		if (rst == RESET_COLD) {
 			debug_uart("Cold\n");
