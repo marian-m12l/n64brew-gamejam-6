@@ -22,6 +22,7 @@ void debug_uart(char* str) {
 #define OFFSCREEN_SIZE 80
 #define MUSIC_CHANNEL 4
 #define SFX_CHANNEL 0
+#define FONT_HALODEK 2
 
 T3DViewport viewport;
 T3DVec3 camPos = {{ 0.0f, 0.0f, 40.0f }};
@@ -56,6 +57,8 @@ static sprite_t* spr_progress;
 static sprite_t* spr_circlemask;
 
 static sprite_t* spr_swirl;
+
+static rdpq_font_t *font_halo_dek;
 
 // TODO One particle system PER CONSOLE
 uint32_t particleCountMax = 128;
@@ -112,13 +115,14 @@ typedef struct {
 	float attack_grace_pediod;
 	uint8_t max_resets_per_console;
 	uint8_t max_power_cycles;
+	uint8_t duration;
 } level_t;
 
 level_t levels[TOTAL_LEVELS] = {
-	{ 1, 9900, 1.0f, 2, 2 },
-	{ 2, 9900, 1.0f, 2, 1 },
-	{ 3, 9800, 0.8f, 1, 1 },
-	{ 4, 9800, 0.8f, 1, 1 }
+	{ 1, 9900, 1.0f, 2, 2, 20 },
+	{ 2, 9900, 1.0f, 2, 1, 30 },
+	{ 3, 9800, 0.8f, 1, 1, 45 },
+	{ 4, 9800, 0.8f, 1, 1, 60 }
 };
 
 #define CONSOLE_MAGIC (0x11223300)
@@ -222,6 +226,7 @@ volatile uint8_t current_level __attribute__((section(".persistent")));
 volatile uint8_t level_reset_count_per_console[MAX_CONSOLES] __attribute__((section(".persistent")));
 volatile uint8_t level_power_cycle_count __attribute__((section(".persistent")));
 // FIXME Counters will need heavy replication to resist long power-cycles
+volatile float level_timer __attribute__((section(".persistent")));
 
 
 /** @brief VI period for showing one NTSC and MPAL picture in ms. */
@@ -479,6 +484,7 @@ void load_level() {
 		level_reset_count_per_console[i] = 0;
 	}
 	level_power_cycle_count = 0;
+	level_timer = level->duration;
 }
 
 void clear_level() {
@@ -547,6 +553,9 @@ void update() {
 			break;
 		}
 		case IN_GAME: {
+			level_timer -= frametime;
+			bool cleared = (level_timer < 0.0f);
+
 			// TODO Play model animation --> shake when attacked ? shaking grows with attacker level?
 			// Move models TODO
 			/*for (int i=0; i<consoles_count; i++) {
@@ -570,8 +579,6 @@ void update() {
 					}
 				}
 			}
-
-			bool cleared = false;
 
 			// Handle inputs
 			if (current_joypad != -1) {
@@ -632,6 +639,7 @@ void update() {
 			if (cleared) {
 				game_state = LEVEL_CLEARED;
 				// TODO unload level immediately ?
+				// TODO Keep level displayed for a few seconds, clear when loading the next level
 				clear_level();
 				play_menu_music();
 				wav64_play(&sfx_blip, SFX_CHANNEL);
@@ -1058,6 +1066,11 @@ void render_2d() {
 					}
 				}
 			}
+
+			// Print timer
+			rdpq_sync_pipe();
+			rdpq_textparms_t textparms = { .align = ALIGN_CENTER, .width = 320, };
+        	rdpq_text_printf(&textparms, FONT_HALODEK, 0, 30, "%d", (int) ceilf(level_timer));
 			break;
 		}
 		case LEVEL_CLEARED:
@@ -1241,6 +1254,10 @@ int main(void) {
     spr_circlemask = sprite_load("rom:/CircleMask.i8.sprite");
 
 	spr_swirl = sprite_load("rom://swirl.i4.sprite");
+
+    font_halo_dek = rdpq_font_load("rom:/HaloDek.font64");
+    rdpq_text_register_font(FONT_HALODEK, font_halo_dek);
+    rdpq_font_style(font_halo_dek, 0, &(rdpq_fontstyle_t){.color = RGBA32(0xFF, 0xFF, 0xFF, 0xFF) });
 	
 	debug_uart("Resources load OK\n");
 

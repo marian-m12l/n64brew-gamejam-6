@@ -20,7 +20,8 @@ assets_conv = $(addprefix filesystem/,$(notdir $(assets_png:%.png=%.sprite))) \
 			  $(addprefix filesystem/,$(notdir $(assets_ttf:%.ttf=%.font64))) \
 			  $(addprefix filesystem/,$(notdir $(assets_gltf:%.glb=%.t3dm))) \
 			  $(addprefix filesystem/,$(notdir $(assets_mp3:%.mp3=%.wav64))) \
-			  $(addprefix filesystem/,$(notdir $(assets_xm:%.xm=%.xm64)))
+			  $(addprefix filesystem/,$(notdir $(assets_xm:%.xm=%.xm64))) \
+			  $(addprefix filesystem/,$(notdir $(assets_ttf:%.ttf=%.font64)))
 
 filesystem/%.sprite: assets/%.png
 	@mkdir -p $(dir $@)
@@ -44,6 +45,11 @@ filesystem/%.xm64: assets/%.xm
 	@$(N64_AUDIOCONV) $(AUDIOCONV_FLAGS) -o filesystem "$<"
 
 filesystem/dragon.wav64: AUDIOCONV_FLAGS += --wav-resample 32000 --wav-mono --wav-compress 3
+
+filesystem/HaloDek.font64: assets/HaloDek.ttf
+	@mkdir -p $(dir $@)
+	@echo "    [FONT] $@"
+	$(N64_MKFONT) $(MKFONT_FLAGS) --range 2e-39 --size 32 --outline 1 -o $(dir $@) "$<"
 
 $(BUILD_DIR)/$(TARGET).dfs: $(assets_conv)
 
