@@ -250,99 +250,108 @@ uint32_t tv_type;
 uint32_t vi_period;
 
 
+int restored_global_state_count;
 int restored_consoles_count;
 int restored_attackers_count;
 int restored_overheat_count;
 
-// TODO game_data_t { consoles, level, current screen, counters, ...} --> replicated with highest persistence !!!
 
-// TODO Replicate game state
+#define GLOBAL_STATE_MAGIC (0xaabbccdd)
+#define GLOBAL_STATE_MASK (0xffffffff)
+#define GLOBAL_STATE_REPLICAS (50)
 
-//volatile uint32_t reset_held __attribute__((section(".persistent")));
-volatile uint32_t reset_count __attribute__((section(".persistent")));
-volatile uint32_t power_cycle_count __attribute__((section(".persistent")));
-volatile bool wrong_joypads_count_displayed __attribute__((section(".persistent")));
-volatile game_state_t game_state __attribute__((section(".persistent")));
-volatile uint8_t current_level __attribute__((section(".persistent")));
-volatile uint8_t level_reset_count_per_console[MAX_CONSOLES] __attribute__((section(".persistent")));
-volatile uint8_t level_power_cycle_count __attribute__((section(".persistent")));
-// FIXME Counters will need heavy replication to resist long power-cycles
-volatile float level_timer __attribute__((section(".persistent")));
-volatile int reset_console __attribute__((section(".persistent")));
+typedef struct {
+	game_state_t game_state;
+	uint8_t current_level;
+	uint32_t reset_count;
+	uint32_t power_cycle_count;
+	uint8_t level_reset_count_per_console[MAX_CONSOLES];
+	uint8_t level_power_cycle_count;
+	float level_timer;
+	int reset_console;
+	bool wrong_joypads_count_displayed;
+	// Exclude remaining fields from replication
+	char __exclude;
+	void* replicas[GLOBAL_STATE_REPLICAS];
+} global_state_t;
+
+#define GLOBAL_STATE_PAYLOAD_SIZE (sizeof(global_state_t)-(sizeof(global_state_t)-offsetof(global_state_t, __exclude)))
+
+global_state_t global_state;
 
 
-/** @brief VI period for showing one NTSC and MPAL picture in ms. */
-#define VI_PERIOD_NTSC_MPAL                 ((float)1000/60)
-/** @brief VI period for showing one PAL picture in ms. */
-#define VI_PERIOD_PAL                       ((float)1000/50)
 
-static void monitor_reset_grace_period(void) {
-	// If a reset has occured and its the last VI interrupt before RESET_TIME_LENGTH grace period, stop all work and exit
-	if(/*exception_reset_time()*/TICKS_SINCE(0) + vi_period >= RESET_TIME_LENGTH) {
-		die();
-	}
+void replicate_global_state() {
+	debugf("replicate global state\n");
+	replicate(&heap1, GLOBAL_STATE_MAGIC, &global_state, GLOBAL_STATE_PAYLOAD_SIZE, GLOBAL_STATE_REPLICAS, true, true, global_state.replicas);
+	debugf("replicas: %p %p %p %p\n", global_state.replicas[0], global_state.replicas[1], global_state.replicas[2], global_state.replicas[3]);
 }
 
-// Callback for NMI/Reset interrupt
-static void reset_interrupt_callback(void) {
-	// There's a minimum guaranteed of 200ms (up to 500ms) before the console actually resets the game
-	// Reset does NOT happen if the player holds the reset button
-	//reset_held = exception_reset_time();
-
-	// TODO Destroy data in heaps ?! in persistent ram ? randomly ?
-	// TODO Visual feedback? Continue rendering and count ticks in main loop ??
-
-	if (current_joypad != -1) {
-		// TODO Apply effect to selected console
-		level_reset_count_per_console[current_joypad]++;
-	}
-
-	// FIXME ticks are zeroe'd when resetting the console ??
-	//reset_held = TICKS_READ();
-	// TODO Just set hardware counter to 0 now
-	C0_WRITE_COUNT(0);
-	in_reset = true;
-	reset_console = current_joypad;
-
-	// Register VI handler to shutdown hardware after grace period
-	register_VI_handler((void(*)(void))monitor_reset_grace_period);
-
-	// Measure how long the reset button is held
-	/*while (true) {
-		reset_held = exception_reset_time();
-	}*/
+void update_global_state() {
+	//debugf("updating global state replicas: %p %p %p %p\n", global_state.replicas[0], global_state.replicas[1], global_state.replicas[2], global_state.replicas[3]);
+	update_replicas(global_state.replicas, &global_state, GLOBAL_STATE_PAYLOAD_SIZE, GLOBAL_STATE_REPLICAS, true);
 }
 
-// This is a callback for t3d_model_draw_custom, it is used when a texture in a model is set to dynamic/"reference"
-void dynamic_tex_cb(void* userData, const T3DMaterial* material, rdpq_texparms_t *tileParams, rdpq_tile_t tile) {
-  if(tile != TILE0)return; // this callback can happen 2 times per mesh, you are allowed to skip calls
-
-  surface_t *offscreenSurf = (surface_t*)userData;
-  rdpq_sync_tile();
-
-  int sHalf = OFFSCREEN_SIZE / 2;
-  int sFull = OFFSCREEN_SIZE;
-
-  // upload a slice of the offscreen-buffer, the screen in the TV model is split into 4 materials for each section
-  // if you are working with a small enough single texture, you can ofc use a normal sprite upload.
-  // the quadrant is determined by the texture reference set in fast64, which can be used as an arbitrary value
-  switch(material->textureA.texReference) { // Note: TILE1 is used here due to CC shenanigans
-    case 1: rdpq_tex_upload_sub(TILE1, offscreenSurf, NULL,  0,     0,     sHalf, sHalf); break;
-    case 2: rdpq_tex_upload_sub(TILE1, offscreenSurf, NULL,  sHalf, 0,     sFull, sHalf); break;
-    case 3: rdpq_tex_upload_sub(TILE1, offscreenSurf, NULL,  0,     sHalf, sHalf, sFull); break;
-    case 4: rdpq_tex_upload_sub(TILE1, offscreenSurf, NULL,  sHalf, sHalf, sFull, sFull); break;
-  }
+void init_global_state() {
+	global_state.game_state = INTRO;
+	global_state.current_level = 0;
+	global_state.reset_count = 0;
+	global_state.power_cycle_count = 0;
+	memset(&global_state.level_reset_count_per_console, 0, sizeof(global_state.level_reset_count_per_console));
+	global_state.level_power_cycle_count = 0;
+	global_state.level_timer = 0;
+	global_state.reset_console = -1;
+	global_state.wrong_joypads_count_displayed = false;
+	replicate_global_state();
 }
 
-/*void draw_bars(float height) {
-  if(height > 0) {
-	rdpq_mode_push();
-	rdpq_set_mode_fill(RGBA32(0, 0, 0, 0xff));
-	rdpq_fill_rectangle(0, 0, 320, height);
-	rdpq_fill_rectangle(0, 240 - height, 320, 240);
-	rdpq_mode_pop();
-  }
-}*/
+void reset_level_global_state(int next_level) {
+	global_state.current_level = next_level;
+	memset(&global_state.level_reset_count_per_console, 0, sizeof(global_state.level_reset_count_per_console));
+	global_state.level_power_cycle_count = 0;
+	global_state.level_timer = levels[next_level].duration;
+}
+
+void set_game_state(game_state_t state) {
+	global_state.game_state = state;
+	update_global_state();
+}
+
+void inc_reset_count() {
+	global_state.reset_count++;
+	update_global_state();
+}
+
+void inc_power_cycle_count() {
+	global_state.power_cycle_count++;
+	update_global_state();
+}
+
+void inc_level_reset_count_per_console(int idx) {
+	global_state.level_reset_count_per_console[idx]++;
+	update_global_state();
+}
+
+void inc_level_power_cycle_count() {
+	global_state.level_power_cycle_count++;
+	update_global_state();
+}
+
+void set_level_timer(float t) {
+	global_state.level_timer = t;
+	update_global_state();
+}
+
+void set_reset_console(int idx) {
+	global_state.reset_console = idx;
+	update_global_state();
+}
+
+void set_wrong_joypads_count_displayed(bool b) {
+	global_state.wrong_joypads_count_displayed = b;
+	update_global_state();
+}
+
 
 void replicate_console(console_t* console) {
 	debugf("replicate console #%d\n", console->id);
@@ -367,6 +376,27 @@ console_t* add_console() {
 	consoles_count++;
 	replicate_console(console);
 	return console;
+}
+
+// This is a callback for t3d_model_draw_custom, it is used when a texture in a model is set to dynamic/"reference"
+void dynamic_tex_cb(void* userData, const T3DMaterial* material, rdpq_texparms_t *tileParams, rdpq_tile_t tile) {
+  if(tile != TILE0)return; // this callback can happen 2 times per mesh, you are allowed to skip calls
+
+  surface_t *offscreenSurf = (surface_t*)userData;
+  rdpq_sync_tile();
+
+  int sHalf = OFFSCREEN_SIZE / 2;
+  int sFull = OFFSCREEN_SIZE;
+
+  // upload a slice of the offscreen-buffer, the screen in the TV model is split into 4 materials for each section
+  // if you are working with a small enough single texture, you can ofc use a normal sprite upload.
+  // the quadrant is determined by the texture reference set in fast64, which can be used as an arbitrary value
+  switch(material->textureA.texReference) { // Note: TILE1 is used here due to CC shenanigans
+    case 1: rdpq_tex_upload_sub(TILE1, offscreenSurf, NULL,  0,     0,     sHalf, sHalf); break;
+    case 2: rdpq_tex_upload_sub(TILE1, offscreenSurf, NULL,  sHalf, 0,     sFull, sHalf); break;
+    case 3: rdpq_tex_upload_sub(TILE1, offscreenSurf, NULL,  0,     sHalf, sHalf, sFull); break;
+    case 4: rdpq_tex_upload_sub(TILE1, offscreenSurf, NULL,  sHalf, sHalf, sFull, sFull); break;
+  }
 }
 
 void setup_console(int i, console_t* console) {
@@ -539,9 +569,51 @@ void reset_overheat(int idx) {
 }
 
 
-void load_level() {
-	debugf("Loading level %d\n", current_level);
-	const level_t* level = &levels[current_level];
+/** @brief VI period for showing one NTSC and MPAL picture in ms. */
+#define VI_PERIOD_NTSC_MPAL                 ((float)1000/60)
+/** @brief VI period for showing one PAL picture in ms. */
+#define VI_PERIOD_PAL                       ((float)1000/50)
+
+static void monitor_reset_grace_period(void) {
+	// If a reset has occured and its the last VI interrupt before RESET_TIME_LENGTH grace period, stop all work and exit
+	if(/*exception_reset_time()*/TICKS_SINCE(0) + vi_period >= RESET_TIME_LENGTH) {
+		die();
+	}
+}
+
+// Callback for NMI/Reset interrupt
+static void reset_interrupt_callback(void) {
+	// There's a minimum guaranteed of 200ms (up to 500ms) before the console actually resets the game
+	// Reset does NOT happen if the player holds the reset button
+	//reset_held = exception_reset_time();
+
+	// TODO Destroy data in heaps ?! in persistent ram ? randomly ?
+	// TODO Visual feedback? Continue rendering and count ticks in main loop ??
+
+	if (current_joypad != -1) {
+		// TODO Apply effect to selected console
+		inc_level_reset_count_per_console(current_joypad);
+	}
+
+	// FIXME ticks are zeroe'd when resetting the console ??
+	//reset_held = TICKS_READ();
+	// TODO Just set hardware counter to 0 now
+	C0_WRITE_COUNT(0);
+	in_reset = true;
+	set_reset_console(current_joypad);
+
+	// Register VI handler to shutdown hardware after grace period
+	register_VI_handler((void(*)(void))monitor_reset_grace_period);
+
+	// Measure how long the reset button is held
+	/*while (true) {
+		reset_held = exception_reset_time();
+	}*/
+}
+
+void load_level(int next_level) {
+	debugf("Loading level %d\n", next_level);
+	const level_t* level = &levels[next_level];
 
 	debugf("Initializing %d consoles\n", level->consoles_count);
 	for (int i=0; i<level->consoles_count; i++) {
@@ -609,17 +681,13 @@ void load_level() {
 		update_console(console);
 	}
 
-	for (int i=0; i<MAX_CONSOLES; i++) {
-		level_reset_count_per_console[i] = 0;
-	}
-	level_power_cycle_count = 0;
-	level_timer = level->duration;
+	reset_level_global_state(next_level);
 	gtime = 0;
 }
 
 void clear_level() {
-	debugf("Clearing level %d\n", current_level);
-	const level_t* level = &levels[current_level];
+	debugf("Clearing level %d\n", global_state.current_level);
+	const level_t* level = &levels[global_state.current_level];
 	debugf("Erasing %d/%d consoles\n", consoles_count, level->consoles_count);
 	int count = consoles_count;	// FIXME We may have lost consoles during a reset !!
 	for (int i=0; i<count; i++) {
@@ -683,22 +751,22 @@ void update() {
 	t3d_viewport_set_projection(&viewport, T3D_DEG_TO_RAD(85.0f), 10.0f, 150.0f);
 	t3d_viewport_look_at(&viewport, &camPos, &camTarget, &(T3DVec3){{0,1,0}});
 
-	switch (game_state) {
+	switch (global_state.game_state) {
 		case INTRO: {
 			if (current_joypad != -1) {
 				joypad_buttons_t pressed = joypad_get_buttons_pressed(current_joypad);
 				if (pressed.a || pressed.start) {
 					// Load level 1
-					load_level();
+					load_level(0);
 					play_ingame_music();
-					game_state = IN_GAME;
+					set_game_state(IN_GAME);
 				}
 			}
 			break;
 		}
 		case IN_GAME: {
-			level_timer -= frametime;
-			bool cleared = (level_timer < 0.0f);
+			set_level_timer(global_state.level_timer - frametime);
+			bool cleared = (global_state.level_timer < 0.0f);
 
 			// TODO Play model animation --> shake when attacked ? shaking grows with attacker level?
 			// Move models TODO
@@ -711,7 +779,7 @@ void update() {
 			}*/
 
 			// Spawn attackers and add attacks
-			const level_t* level = &levels[current_level];
+			const level_t* level = &levels[global_state.current_level];
 			for (int i=0; i<consoles_count; i++) {
 				console_t* console = &consoles[i];
 				attacker_t* attacker = &console_attackers[i];
@@ -798,7 +866,7 @@ void update() {
 
 			// TODO Handle end condition and change level
 			if (cleared) {
-				game_state = LEVEL_CLEARED;
+				set_game_state(LEVEL_CLEARED);
 				// TODO unload level immediately ?
 				// TODO Keep level displayed for a few seconds, clear when loading the next level
 				clear_level();
@@ -813,14 +881,14 @@ void update() {
 				if (pressed.a || pressed.start) {
 					// Load next level
 					//clear_level();
-					current_level++;
-					if (current_level < TOTAL_LEVELS) {
-						load_level();
+					int next_level = global_state.current_level + 1;
+					if (next_level < TOTAL_LEVELS) {
+						load_level(next_level);
 						play_ingame_music();
-						game_state = IN_GAME;
+						set_game_state(IN_GAME);
 					} else {
 						wav64_play(&sfx_blip, SFX_CHANNEL);
-						game_state = FINISHED;
+						set_game_state(FINISHED);
 					}
 				}
 			}
@@ -831,8 +899,8 @@ void update() {
 				joypad_buttons_t pressed = joypad_get_buttons_pressed(current_joypad);
 				if (pressed.start) {
 					// TODO Reinitialize game data
-					current_level = 0;
-					game_state = INTRO;
+					// FIXME current_level = 0;
+					set_game_state(INTRO);
 					wav64_play(&sfx_blip, SFX_CHANNEL);
 				}
 			}
@@ -1027,7 +1095,7 @@ static void drawsmoke(particles_t* particles, T3DVec3 position, int heat_level) 
 }
 
 void render_offscreen() {
-	if (game_state == IN_GAME) {
+	if (global_state.game_state == IN_GAME) {
 		for (int i=0; i<consoles_count; i++) {
 			console_t* console = &consoles[i];
 			// ======== Draw (Offscreen) ======== //
@@ -1085,7 +1153,7 @@ void render_3d() {
 	t3d_light_set_directional(0, colorDir, &lightDirVec);
 	t3d_light_set_count(1);
 
-	switch (game_state) {
+	switch (global_state.game_state) {
 		case INTRO:
 			break;
 		case IN_GAME: {
@@ -1165,23 +1233,23 @@ void render_2d() {
 	if (heap_size > 4*1024*1024) {
 		heap_size -= 4*1024*1024;
 	}
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 160, "Reset console : %ld", reset_console);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 160, "Reset console : %ld", global_state.reset_console);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 170, "    Boot type : %s", rst == RESET_COLD ? "COLD" : "WARM");
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 180, "     Restored : %ld/%ld/%ld", restored_consoles_count, restored_attackers_count, restored_overheat_count);
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 190, "       Resets : %ld/%d-%d-%d-%d", reset_count, level_reset_count_per_console[0], level_reset_count_per_console[1], level_reset_count_per_console[2], level_reset_count_per_console[3]);
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 200, " Power cycles : %ld/%d", power_cycle_count, level_power_cycle_count);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 180, "     Restored : %ld/%ld/%ld/%ld", restored_global_state_count, restored_consoles_count, restored_attackers_count, restored_overheat_count);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 190, "       Resets : %ld/%d-%d-%d-%d", global_state.reset_count, global_state.level_reset_count_per_console[0], global_state.level_reset_count_per_console[1], global_state.level_reset_count_per_console[2], global_state.level_reset_count_per_console[3]);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 200, " Power cycles : %ld/%d", global_state.power_cycle_count, global_state.level_power_cycle_count);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 210, "    Heap size : %d", heap_size);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 220, "    Allocated : %d", stats.used);
 
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 160, "State     : %d", game_state);
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 170, "Level     : %d", current_level);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 160, "State     : %d", global_state.game_state);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 170, "Level     : %d", global_state.current_level);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 180, "Port      : %d", current_joypad);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 190, "Joypads   : %d/%d/%d/%d", joypad_is_connected(JOYPAD_PORT_1), joypad_is_connected(JOYPAD_PORT_2), joypad_is_connected(JOYPAD_PORT_3), joypad_is_connected(JOYPAD_PORT_4));
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 200, "Consoles  : %ld", consoles_count);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 210, "Reset held: %ldms", held_ms);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 220, "FPS   : %.2f", display_get_fps());
 
-	switch (game_state) {
+	switch (global_state.game_state) {
 		case INTRO:
 			rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 40, 100, "Bla bla bla... explain game");
 			break;
@@ -1206,7 +1274,7 @@ void render_2d() {
 					t3d_viewport_calc_viewspace_pos(&viewport, &billboardScreenPos, &billboardPos);
 					int x = floorf(billboardScreenPos.v[0]);
 					int y = floorf(billboardScreenPos.v[1]);
-					const level_t* level = &levels[current_level];
+					const level_t* level = &levels[global_state.current_level];
 					float s = powf(0.7f, (level->consoles_count - 1));
 					for (int j=0; j<attacker->level; j++) {
 						queue_button_t btn = get_attacker_button(i, j);
@@ -1239,7 +1307,7 @@ void render_2d() {
 			// Print timer
 			rdpq_sync_pipe();
 			rdpq_textparms_t textparms = { .align = ALIGN_CENTER, .width = 320, };
-        	rdpq_text_printf(&textparms, FONT_HALODEK, 0, 30, "%d", (int) ceilf(level_timer));
+        	rdpq_text_printf(&textparms, FONT_HALODEK, 0, 30, "%d", (int) ceilf(global_state.level_timer));
 			break;
 		}
 		case LEVEL_CLEARED:
@@ -1314,6 +1382,7 @@ int main(void) {
 
 	debug_uart("Joypad poll OK\n");
 
+	global_state_t restored_global_state;
 	console_t restored_consoles[MAX_CONSOLES];
 	attacker_t restored_attackers[MAX_CONSOLES];
 	overheat_t restored_overheat[MAX_CONSOLES];
@@ -1324,6 +1393,7 @@ int main(void) {
 		// FIXME Restoration is BROKEN
 		// FIXME Don't restore directly in rrays --> use a dedicated array, then update item in-place !!
 
+		restored_global_state_count = restore(&heap1, &restored_global_state, GLOBAL_STATE_PAYLOAD_SIZE, sizeof(global_state_t), 1, GLOBAL_STATE_MAGIC, GLOBAL_STATE_MASK);
 		restored_consoles_count = restore(&heap1, restored_consoles, CONSOLE_PAYLOAD_SIZE, sizeof(console_t), MAX_CONSOLES, CONSOLE_MAGIC, CONSOLE_MASK);
 		restored_attackers_count = restore(&heap2, restored_attackers, ATTACKER_PAYLOAD_SIZE, sizeof(attacker_t), MAX_CONSOLES, ATTACKER_MAGIC, ATTACKER_MASK);
 		restored_overheat_count = restore(&heap2, restored_overheat, OVERHEAT_PAYLOAD_SIZE, sizeof(overheat_t), MAX_CONSOLES, OVERHEAT_MAGIC, OVERHEAT_MASK);
@@ -1333,96 +1403,108 @@ int main(void) {
 
 	debug_uart("Restoration OK\n");
 
-	if (restored_consoles_count == 0) {
+	bool restored_ok = false;
+	if (restored_global_state_count == 1) {
+		debug_uart("Entering followup boot sequence\n");
+		// TODO Make sure enough data was recovered: current_level, game_state, ... --> REPLICAS + RESTORE !!
+
+		debugf("restored: %d global state / %d consoles / %d attackers / %d overheat\n", restored_global_state_count, restored_consoles_count, restored_attackers_count, restored_overheat_count);
+
+		global_state = restored_global_state;
+		debugf("Restored level %d\n", global_state.current_level);
+		bool broken_level = false;
+		if (global_state.game_state == IN_GAME && global_state.current_level >= 0 && global_state.current_level < TOTAL_LEVELS) {
+			const level_t* level = &levels[global_state.current_level];
+			if (restored_consoles_count != level->consoles_count) {
+				debugf("FAILED TO RESTORE ALL CONSOLES !!! %d != %d\n", restored_consoles_count, level->consoles_count);
+				// TODO Should show game over ?
+				// TODO FAIL! GAME OVER ! RESTART GAME !
+				debug_uart("BROKEN: fallback to initial boot sequence\n");
+				broken_level = true;
+			}
+		}
+
+		if (!broken_level) {
+			replicate_global_state();
+
+			debugf("game_state: %d\n", global_state.game_state);
+			debugf("reset_console: %d\n", global_state.reset_console);
+
+			// TODO Support restarting to level cleared screen ??
+
+			// Restored at least once console: keep playing
+			consoles_count = restored_consoles_count;
+			for (int i=0; i<restored_consoles_count; i++) {
+				uint32_t id = restored_consoles[i].id;
+				console_t* console = &consoles[id];
+				*console = restored_consoles[i];
+				debugf("restored: %d\n", console->id);
+				//debugf("rotation: %f %f %f\n", console->rotation.x, console->rotation.y, console->rotation.z);
+				//debugf("position: %f %f %f\n", console->position.x, console->position.y, console->position.z);
+				//debugf("rot_speed: %f\n", console->rot_speed);
+				console->displayable = &console_displayables[i];
+				// Recreate replicas (alternative would be to keep replicas as-is)
+				replicate_console(console);
+			}
+			debug_uart("Consoles restored\n");
+
+			for (int i=0; i<restored_attackers_count; i++) {
+				uint32_t id = restored_attackers[i].id;
+				attacker_t* attacker = &console_attackers[id];
+				*attacker = restored_attackers[i];
+				debugf("restored attacker: %d\n", attacker->id);
+				// TODO instead of replicating, just keep track of the resored _valid_ replicas ?
+				replicate_attacker(attacker);
+			}
+
+			// TODO restored attackers MAY NOT BE ORDERED
+			for (int i=0; i<restored_overheat_count; i++) {
+				uint32_t id = restored_overheat[i].id;
+				overheat_t* overheat = &console_overheat[id];
+				*overheat = restored_overheat[i];
+				debugf("restored overheat: %d\n", overheat->id);
+				// TODO instead of replicating, just keep track of the resored _valid_ replicas ?
+				replicate_overheat(overheat);
+				
+				// Decrease overheat level of console depending on held_ms
+				if (rst == RESET_WARM && overheat->id == global_state.reset_console && overheat->overheat_level > 0) {
+					debugf("DECREASE overheat of RESET CONSOLE: %d\n", overheat->id);
+					decrease_overheat(id);
+					if (held_ms >= 5000) {
+						debugf("DECREASE AGAIN overheat of RESET CONSOLE: %d held=%d\n", overheat->id, held_ms);
+						decrease_overheat(id);
+					}
+				}
+			}
+
+			set_reset_console(-1);
+
+			if (rst == RESET_COLD) {
+				debug_uart("Cold\n");
+				inc_power_cycle_count();
+				inc_level_power_cycle_count();
+				// TODO Handle too many power cycles in level --> game over
+			} else {
+				debug_uart("Warm\n");
+				inc_reset_count();
+				//level_reset_count_per_console++;
+				// Counter was already incremented in reset IRQ handler
+				// TODO Handle too many resets in level --> game over? penalty?
+			}
+			debug_uart("Followup boot sequence OK\n");
+			restored_ok = true;
+		}
+	}
+
+	if (!restored_ok) {
 		debug_uart("Entering initial boot sequence\n");
 		//n64brew_logo();
 		//libdragon_logo();
 
 		// Initial setup
 		consoles_count = 0;
-		reset_count = 0;
-		power_cycle_count = 0;
-		wrong_joypads_count_displayed = false;
-		current_level = 0;
-		game_state = INTRO;
+		init_global_state();
 		debug_uart("Cold initial sequence OK\n");
-	} else {
-		debug_uart("Entering followup boot sequence\n");
-		// TODO Make sure enough data was recovered: current_level, game_state, ... --> REPLICAS + RESTORE !!
-
-		debugf("restored: %d consoles / %d attackers / %d overheat\n", restored_consoles_count, restored_attackers_count, restored_overheat_count);
-
-		debugf("Restored level %d\n", current_level);
-		if (current_level >= 0 && current_level < TOTAL_LEVELS) {
-			const level_t* level = &levels[current_level];
-			if (restored_consoles_count != level->consoles_count) {
-				debugf("FAILED TO RESTORE ALL CONSOLES !!! %d != %d\n", restored_consoles_count, level->consoles_count);
-				// TODO Should show game over ?
-			}
-		}
-
-		// TODO Support restarting to level cleared screen ??
-
-		// Restored at least once console: keep playing
-		consoles_count = restored_consoles_count;
-		for (int i=0; i<restored_consoles_count; i++) {
-			uint32_t id = restored_consoles[i].id;
-			console_t* console = &consoles[id];
-			*console = restored_consoles[i];
-			debugf("restored: %d\n", console->id);
-			debugf("rotation: %f %f %f\n", console->rotation.x, console->rotation.y, console->rotation.z);
-			debugf("position: %f %f %f\n", console->position.x, console->position.y, console->position.z);
-			debugf("rot_speed: %f\n", console->rot_speed);
-			console->displayable = &console_displayables[i];
-			// Recreate replicas (alternative would be to keep replicas as-is)
-			replicate_console(console);
-		}
-		debug_uart("Consoles restored\n");
-
-		for (int i=0; i<restored_attackers_count; i++) {
-			uint32_t id = restored_attackers[i].id;
-			attacker_t* attacker = &console_attackers[id];
-			*attacker = restored_attackers[i];
-			debugf("restored attacker: %d\n", attacker->id);
-			// TODO instead of replicating, just keep track of the resored _valid_ replicas ?
-			replicate_attacker(attacker);
-		}
-
-		// TODO restored attackers MAY NOT BE ORDERED
-		for (int i=0; i<restored_overheat_count; i++) {
-			uint32_t id = restored_overheat[i].id;
-			overheat_t* overheat = &console_overheat[id];
-			*overheat = restored_overheat[i];
-			debugf("restored overheat: %d\n", overheat->id);
-			// TODO instead of replicating, just keep track of the resored _valid_ replicas ?
-			replicate_overheat(overheat);
-			
-			// TODO Decrease overheat level of console depending on held_ms
-			if (/*rst == RESET_WARM && */overheat->id == reset_console && overheat->overheat_level > 0) {
-				debugf("DECREASE overheat of RESET CONSOLE: %d\n", overheat->id);
-				decrease_overheat(id);
-				if (held_ms >= 5000) {
-					debugf("DECREASE AGAIN overheat of RESET CONSOLE: %d held=%d\n", overheat->id, held_ms);
-					decrease_overheat(id);
-				}
-			}
-		}
-
-		reset_console = -1;
-
-		if (rst == RESET_COLD) {
-			debug_uart("Cold\n");
-			power_cycle_count++;
-			level_power_cycle_count++;
-			// TODO Handle too many power cycles in level --> game over
-		} else {
-			debug_uart("Warm\n");
-			reset_count++;
-			//level_reset_count_per_console++;
-			// Counter was already incremented in reset IRQ handler
-			// TODO Handle too many resets in level --> game over? penalty?
-		}
-		debug_uart("Followup boot sequence OK\n");
 	}
 	
 	//display_init(RESOLUTION_320x240, DEPTH_16_BPP, FB_COUNT, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS);
@@ -1445,7 +1527,7 @@ int main(void) {
 	//audio_init(44100, 4);
 	//mixer_init(20);
     
-	if (game_state == IN_GAME) {
+	if (global_state.game_state == IN_GAME) {
 		play_ingame_music();
 	} else {
 		play_menu_music();
@@ -1482,8 +1564,11 @@ int main(void) {
 
 	// Happens only on reset
 	// Load model for each console
-	for (int i=0; i<consoles_count; i++) {
-		setup_console(i, &consoles[i]);
+	// TODO Only ig in-game !
+	if (global_state.game_state == IN_GAME) {
+		for (int i=0; i<consoles_count; i++) {
+			setup_console(i, &consoles[i]);
+		}
 	}
 	
 	debug_uart("Consoles setup OK\n");
@@ -1518,9 +1603,9 @@ int main(void) {
 			current_joypad = -1;
 			// TODO Pause game and display message
 			//debugf("Please plug only one joypad\n");
-			if (!wrong_joypads_count_displayed) {
+			if (!global_state.wrong_joypads_count_displayed) {
 				paused_wrong_joypads_count = true;
-				wrong_joypads_count_displayed = true;
+				set_wrong_joypads_count_displayed(true);
 			}
 		} else {*/
 			paused_wrong_joypads_count = false;
