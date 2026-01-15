@@ -97,7 +97,8 @@ typedef enum {
 	INTRO = 0,
 	IN_GAME,
 	LEVEL_CLEARED,
-	FINISHED
+	FINISHED,
+	GAME_OVER
 } game_state_t;
 
 #define TOTAL_LEVELS (4)
@@ -247,7 +248,7 @@ int current_joypad = -1;
 float holding = 0.0f;
 uint32_t held_ms;
 reset_type_t rst;
-volatile bool in_reset;
+//volatile bool in_reset;
 bool wrong_joypads_count = false;
 bool paused_wrong_joypads_count = false;
 uint32_t tv_type;
@@ -258,6 +259,9 @@ int restored_global_state_count;
 int restored_consoles_count;
 int restored_attackers_count;
 int restored_overheat_count;
+
+
+volatile int reset_console __attribute__((section(".persistent")));
 
 
 #define GLOBAL_STATE_MAGIC (0xaabbccdd)
@@ -272,7 +276,6 @@ typedef struct {
 	uint8_t level_reset_count_per_console[MAX_CONSOLES];
 	uint8_t level_power_cycle_count;
 	float level_timer;
-	int reset_console;
 	bool wrong_joypads_count_displayed;
 	// Exclude remaining fields from replication
 	char __exclude;
@@ -288,15 +291,15 @@ global_state_t global_state;
 
 // TODO Dump everytime something happens? on each frame?
 void dump_game_state() {
+#if 0	
 	debugf_uart("==========\n");
 	// Global state
-	debugf_uart("\tGLOB: %d | %d || %02d | %02d | %02d %02d %02d %02d | %02d || %06.3f || %02d || %d\n",
+	debugf_uart("\tGLOB: %d | %d || %02d | %02d | %02d %02d %02d %02d | %02d || %06.3f || %d\n",
 		global_state.game_state, global_state.current_level,
 		global_state.reset_count, global_state.power_cycle_count,
 		global_state.level_reset_count_per_console[0], global_state.level_reset_count_per_console[1], global_state.level_reset_count_per_console[2], global_state.level_reset_count_per_console[3],
 		global_state.level_power_cycle_count,
 		global_state.level_timer,
-		global_state.reset_console,
 		global_state.wrong_joypads_count_displayed
 	);
 	// Consoles
@@ -326,6 +329,7 @@ void dump_game_state() {
 		console_overheat[3].id, console_overheat[3].overheat_level, console_overheat[3].last_overheat
 	);
 	debugf_uart("==========\n");
+#endif
 }
 
 
@@ -351,7 +355,6 @@ void init_global_state() {
 	memset(&global_state.level_reset_count_per_console, 0, sizeof(global_state.level_reset_count_per_console));
 	global_state.level_power_cycle_count = 0;
 	global_state.level_timer = 0;
-	global_state.reset_console = -1;
 	global_state.wrong_joypads_count_displayed = false;
 	replicate_global_state();
 }
@@ -390,11 +393,6 @@ void inc_level_power_cycle_count() {
 
 void set_level_timer(float t) {
 	global_state.level_timer = t;
-	update_global_state();
-}
-
-void set_reset_console(int idx) {
-	global_state.reset_console = idx;
 	update_global_state();
 }
 
@@ -593,11 +591,6 @@ void increase_overheat(int idx) {
 		overheat->overheat_level++;
 		overheat->last_overheat = gtime;
 		debugf_uart("increase heat %d: level=%d\n", idx, overheat->overheat_level);
-		// TODO Game over if reached level 4 ?
-		if (overheat->overheat_level > 3) {
-			debugf_uart("GAME OVER %d\n", idx);
-			overheat->overheat_level = 3;	// TODO To avoid crashing particles
-		}
 		// TODO replicate on first spawn ? update otherwise
 		if (overheat->replicas[0] == NULL) {
 			replicate_overheat(overheat);
@@ -651,17 +644,18 @@ static void reset_interrupt_callback(void) {
 	// TODO Destroy data in heaps ?! in persistent ram ? randomly ?
 	// TODO Visual feedback? Continue rendering and count ticks in main loop ??
 
-	if (current_joypad != -1) {
+	/*if (current_joypad != -1) {
 		// TODO Apply effect to selected console
 		inc_level_reset_count_per_console(current_joypad);
-	}
+	}*/
 
 	// FIXME ticks are zeroe'd when resetting the console ??
 	//reset_held = TICKS_READ();
 	// TODO Just set hardware counter to 0 now
 	C0_WRITE_COUNT(0);
-	in_reset = true;
-	set_reset_console(current_joypad);
+	//in_reset = true;
+	// TODO Use simple persistent variable to avoid replicating global state
+	reset_console = current_joypad;
 
 	// Register VI handler to shutdown hardware after grace period
 	register_VI_handler((void(*)(void))monitor_reset_grace_period);
@@ -854,6 +848,13 @@ void update() {
 				}
 				if (attacker->spawned && attacker->level == QUEUE_LENGTH && overheat->last_overheat + level->overheat_pediod <= gtime) {
 					increase_overheat(i);
+					// TODO Game over if reached level 4 ?
+					if (console_overheat[i].overheat_level > 3) {
+						debugf_uart("OVERHEAT GAME OVER %d\n", i);
+						clear_level();
+						play_menu_music();	// TODO game over music
+						set_game_state(GAME_OVER);
+					}
 				}
 				// TODO Decrease current console's heat on reset (the one that was selected when pressing reset!)
 			}
@@ -911,6 +912,13 @@ void update() {
 					// Increase heat
 					int idx = current_joypad;
 					increase_overheat(idx);
+					// TODO Game over if reached level 4 ?
+					if (console_overheat[idx].overheat_level > 3) {
+						debugf_uart("OVERHEAT GAME OVER %d\n", idx);
+						clear_level();
+						play_menu_music();	// TODO game over music
+						set_game_state(GAME_OVER);
+					}
 				}
 				if (pressed.d_down) {
 					// Decrease heat
@@ -956,6 +964,18 @@ void update() {
 			break;
 		}
 		case FINISHED: {
+			if (current_joypad != -1) {
+				joypad_buttons_t pressed = joypad_get_buttons_pressed(current_joypad);
+				if (pressed.start) {
+					// TODO Reinitialize game data
+					// FIXME current_level = 0;
+					set_game_state(INTRO);
+					wav64_play(&sfx_blip, SFX_CHANNEL);
+				}
+			}
+			break;
+		}
+		case GAME_OVER: {
 			if (current_joypad != -1) {
 				joypad_buttons_t pressed = joypad_get_buttons_pressed(current_joypad);
 				if (pressed.start) {
@@ -1164,11 +1184,11 @@ void render_offscreen() {
 			rdpq_attach_clear(&console->displayable->offscreen_surf, &console->displayable->offscreen_surf_z);
 
 			// TODO Draw only for the current console !!
-			if (in_reset && current_joypad == i) {
+			/*if (in_reset && current_joypad == i) {
 				// TODO Also remove noise quickly !
 				//draw_bars(TICKS_TO_MS(TICKS_READ()));
 				rdpq_clear(RGBA32(0xff, 0, 0, 0xff));
-			} else {
+			} else {*/
 				attacker_t* attacker = &console_attackers[i];
 				int x = 0;
 				int y = 0;
@@ -1196,7 +1216,7 @@ void render_offscreen() {
 						.scale_x = s, .scale_y = s,
 					});
 				}
-			}
+			//}
 
 			rdpq_detach();
 		}
@@ -1282,6 +1302,8 @@ void render_3d() {
 			break;
 		case FINISHED:
 			break;
+		case GAME_OVER:
+			break;
 	}
 }
 
@@ -1294,7 +1316,7 @@ void render_2d() {
 	if (heap_size > 4*1024*1024) {
 		heap_size -= 4*1024*1024;
 	}
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 160, "Reset console : %ld", global_state.reset_console);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 160, "Reset console : %ld", reset_console);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 170, "    Boot type : %s", rst == RESET_COLD ? "COLD" : "WARM");
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 180, "     Restored : %ld/%ld/%ld/%ld", restored_global_state_count, restored_consoles_count, restored_attackers_count, restored_overheat_count);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 190, "       Resets : %ld/%d-%d-%d-%d", global_state.reset_count, global_state.level_reset_count_per_console[0], global_state.level_reset_count_per_console[1], global_state.level_reset_count_per_console[2], global_state.level_reset_count_per_console[3]);
@@ -1376,6 +1398,11 @@ void render_2d() {
 			break;
 		case FINISHED:
 			rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 40, 100, "FINISHED !!");
+			break;
+		case GAME_OVER:
+			rdpq_textparms_t textparms = { .align = ALIGN_CENTER, .width = 320, };
+        	rdpq_text_printf(&textparms, FONT_HALODEK, 0, 80, "GAME");
+        	rdpq_text_printf(&textparms, FONT_HALODEK, 0, 120, "OVER");
 			break;
 	}
 }
@@ -1495,7 +1522,7 @@ int main(void) {
 			replicate_global_state();
 
 			debugf_uart("game_state: %d\n", global_state.game_state);
-			debugf_uart("reset_console: %d\n", global_state.reset_console);
+			debugf_uart("reset_console: %d\n", reset_console);
 
 			// TODO Support restarting to level cleared screen ??
 
@@ -1539,7 +1566,7 @@ int main(void) {
 				replicate_overheat(overheat);
 				
 				// Decrease overheat level of console depending on held_ms
-				if (rst == RESET_WARM && overheat->id == global_state.reset_console && overheat->overheat_level > 0) {
+				if (rst == RESET_WARM && overheat->id == reset_console && overheat->overheat_level > 0) {
 					debugf_uart("DECREASE overheat of RESET CONSOLE: %d\n", overheat->id);
 					decrease_overheat(id);
 					if (held_ms >= 5000) {
@@ -1549,8 +1576,6 @@ int main(void) {
 				}
 			}
 
-			set_reset_console(-1);
-
 			if (rst == RESET_COLD) {
 				debugf_uart("Cold\n");
 				inc_power_cycle_count();
@@ -1559,10 +1584,14 @@ int main(void) {
 			} else {
 				debugf_uart("Warm\n");
 				inc_reset_count();
+				inc_level_reset_count_per_console(reset_console);
 				//level_reset_count_per_console++;
 				// Counter was already incremented in reset IRQ handler
 				// TODO Handle too many resets in level --> game over? penalty?
 			}
+
+			reset_console = -1;
+
 			debugf_uart("Followup boot sequence OK\n");
 			restored_ok = true;
 		}
@@ -1575,6 +1604,7 @@ int main(void) {
 
 		// Initial setup
 		consoles_count = 0;
+		reset_console = -1;
 		init_global_state();
 		debugf_uart("Cold initial sequence OK\n");
 	}
