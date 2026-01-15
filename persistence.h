@@ -23,3 +23,4 @@ void replicate(heap_t* heap, uint32_t id, void* data, int len, int replicas, boo
 void update_replicas(void** addresses, void* data, int len, int replicas, bool flush);
 void erase_and_free_replicas(heap_t* heap, void** addresses, int replicas);
 int restore(heap_t* heap, void* dest, int len, int stride, int max, uint32_t magic, uint32_t mask);
+void clear_heaps();

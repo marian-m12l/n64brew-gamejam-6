@@ -34,7 +34,7 @@ heap_t heap4 = {
 	.len = EXPANSION_HEAP_COUNT-1024
 };
 
-void* alloc_heap(heap_t* heap, int size, bool cached) {
+static void* alloc_heap(heap_t* heap, int size, bool cached) {
 	assert(size <= CHUNK_SIZE);
 	int i=0;
 	while(heap->allocated[i] && i < heap->len) {
@@ -44,12 +44,22 @@ void* alloc_heap(heap_t* heap, int size, bool cached) {
 	return cached ? &(heap->cache[i]) : &(heap->heap[i]);
 }
 
-void free_heap(heap_t* heap, void* ptr) {
+static void free_heap(heap_t* heap, void* ptr) {
 	int i = (ptr - (void*)&heap->heap) / CHUNK_SIZE;
 	if (i < 0 || i > 1015) {
 		i = (ptr - (void*)&heap->cache) / CHUNK_SIZE;
 	}
 	heap->allocated[i] = false;
+}
+
+static void clear_heap(heap_t* heap) {
+	for (int i=0; i < heap->len; i++) {
+		heap->allocated[i] = false;
+	}
+	memset(heap->cache, 0, heap->len * CHUNK_SIZE);
+	memset(heap->heap, 0, heap->len * CHUNK_SIZE);	// FIXME Needed ?
+	data_cache_hit_writeback(heap->cache, heap->len * CHUNK_SIZE);
+	inst_cache_hit_invalidate(heap->cache, heap->len * CHUNK_SIZE);
 }
 
 static uint16_t calculate_crc16(const uint8_t * data, size_t len) {
@@ -123,6 +133,7 @@ void erase_and_free_replicas(heap_t* heap, void** addresses, int replicas) {
 			if (((uintptr_t) ptr & 0x80000000) == 0x80000000) {
 				data_cache_hit_writeback(ptr, CHUNK_SIZE);
 				inst_cache_hit_invalidate(ptr, CHUNK_SIZE);
+				memset((ptr + 0x20000000), 0, CHUNK_SIZE);
 			}
 			free_heap(heap, ptr);
 		}
@@ -180,4 +191,12 @@ int restore(heap_t* heap, void* dest, int len, int stride, int max, uint32_t mag
 	debugf("Found %d instances\n", restored);
     free(ids);
 	return restored;
+}
+
+void clear_heaps() {
+	// For each heap, clear and free allocated chunks
+	clear_heap(&heap1);
+	clear_heap(&heap2);
+	clear_heap(&heap3);
+	clear_heap(&heap4);
 }
