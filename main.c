@@ -47,6 +47,7 @@ static float gtime;
 
 static xm64player_t music;
 static wav64_t sfx_blip;
+static wav64_t sfx_crt_off;
 
 
 static sprite_t* logo_n64;
@@ -251,8 +252,6 @@ reset_type_t rst;
 //volatile bool in_reset;
 bool wrong_joypads_count = false;
 bool paused_wrong_joypads_count = false;
-uint32_t tv_type;
-uint32_t vi_period;
 
 
 int restored_global_state_count;
@@ -262,6 +261,7 @@ int restored_overheat_count;
 
 
 volatile int reset_console __attribute__((section(".persistent")));
+volatile uint32_t reset_ticks __attribute__((section(".persistent")));
 
 
 #define GLOBAL_STATE_MAGIC (0xaabbccdd)
@@ -623,47 +623,17 @@ void reset_overheat(int idx) {
 }
 
 
-/** @brief VI period for showing one NTSC and MPAL picture in ms. */
-#define VI_PERIOD_NTSC_MPAL                 ((float)1000/60)
-/** @brief VI period for showing one PAL picture in ms. */
-#define VI_PERIOD_PAL                       ((float)1000/50)
-
-static void monitor_reset_grace_period(void) {
-	// If a reset has occured and its the last VI interrupt before RESET_TIME_LENGTH grace period, stop all work and exit
-	if(/*exception_reset_time()*/TICKS_SINCE(0) + vi_period >= RESET_TIME_LENGTH) {
-		die();
-	}
-}
 
 // Callback for NMI/Reset interrupt
 static void reset_interrupt_callback(void) {
-	// There's a minimum guaranteed of 200ms (up to 500ms) before the console actually resets the game
-	// Reset does NOT happen if the player holds the reset button
-	//reset_held = exception_reset_time();
-
-	// TODO Destroy data in heaps ?! in persistent ram ? randomly ?
-	// TODO Visual feedback? Continue rendering and count ticks in main loop ??
-
-	/*if (current_joypad != -1) {
-		// TODO Apply effect to selected console
-		inc_level_reset_count_per_console(current_joypad);
-	}*/
-
-	// FIXME ticks are zeroe'd when resetting the console ??
-	//reset_held = TICKS_READ();
-	// TODO Just set hardware counter to 0 now
-	C0_WRITE_COUNT(0);
-	//in_reset = true;
-	// TODO Use simple persistent variable to avoid replicating global state
-	reset_console = current_joypad;
-
-	// Register VI handler to shutdown hardware after grace period
-	register_VI_handler((void(*)(void))monitor_reset_grace_period);
-
-	// Measure how long the reset button is held
-	/*while (true) {
-		reset_held = exception_reset_time();
-	}*/
+	// Keep track of the time the player pressed the reset button
+	reset_ticks = TICKS_READ() | 1;
+	if (global_state.game_state == IN_GAME) {
+		// Keep track of the current console
+		reset_console = current_joypad;
+		// Play sound effect
+		wav64_play(&sfx_crt_off, SFX_CHANNEL);
+	}
 }
 
 void load_level(int next_level) {
@@ -866,7 +836,7 @@ void update() {
 				if (attacker->spawned) {
 					queue_button_t btn = get_attacker_button(current_joypad, 0);
 					joypad_buttons_t down = joypad_get_buttons(current_joypad);
-					bool held;
+					bool held = false;
 					switch (btn) {
 						case BTN_A:
 							held = down.a && !down.b && !down.c_up && !down.c_down;
@@ -1175,6 +1145,23 @@ static void drawsmoke(particles_t* particles, T3DVec3 position, int heat_level) 
 	rdpq_mode_pop();
 }
 
+void draw_bars(float height) {
+  if(height > 0) {
+	if (height > 39)	height = 39;
+	// White line in the middle
+	uint8_t intensity = (int) (height * 0xff / 39);
+	rdpq_set_mode_standard();
+	rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+	rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+	rdpq_set_prim_color(RGBA32(0xff, 0xff, 0xff, intensity));
+	rdpq_fill_rectangle(0, 0, 80, 80);
+	// Black bars top and bottom
+	rdpq_set_prim_color(RGBA32(0, 0, 0, 0xff));
+	rdpq_fill_rectangle(0, 0, 80, height);
+	rdpq_fill_rectangle(0, 80 - height, 80, 80);
+  }
+}
+
 void render_offscreen() {
 	if (global_state.game_state == IN_GAME) {
 		for (int i=0; i<consoles_count; i++) {
@@ -1183,40 +1170,39 @@ void render_offscreen() {
 			// Render the offscreen-scene first, for that we attach the extra buffer instead of the screen one
 			rdpq_attach_clear(&console->displayable->offscreen_surf, &console->displayable->offscreen_surf_z);
 
-			// TODO Draw only for the current console !!
-			/*if (in_reset && current_joypad == i) {
-				// TODO Also remove noise quickly !
-				//draw_bars(TICKS_TO_MS(TICKS_READ()));
-				rdpq_clear(RGBA32(0xff, 0, 0, 0xff));
-			} else {*/
-				attacker_t* attacker = &console_attackers[i];
-				int x = 0;
-				int y = 0;
-				float s = 1.0f - (.25f * attacker->level);
-				if (s > 0.0f) {
-					rdpq_sprite_blit(logo_n64, x, y, &(rdpq_blitparms_t) {
-						.scale_x = s, .scale_y = s,
-					});
+			attacker_t* attacker = &console_attackers[i];
+			int x = 0;
+			int y = 0;
+			float s = 1.0f - (.25f * attacker->level);
+			if (s > 0.0f) {
+				rdpq_set_mode_standard();
+				rdpq_sprite_blit(logo_n64, x, y, &(rdpq_blitparms_t) {
+					.scale_x = s, .scale_y = s,
+				});
+			}
+			if (attacker->spawned) {
+				// Draw attacker logo (size grows with attacker level)
+				x = 80 - 20 * attacker->level;
+				y = 80 - 20 * attacker->level;
+				s = .25f * attacker->level;
+				sprite_t* spr = NULL;
+				switch (attacker->rival_type) {
+					case SATURN:
+						spr = logo_saturn;
+						break;
+					case PLAYSTATION:
+						spr = logo_playstation;
+						break;
 				}
-				if (attacker->spawned) {
-					// Draw attacker logo (size grows with attacker level)
-					x = 80 - 20 * attacker->level;
-					y = 80 - 20 * attacker->level;
-					s = .25f * attacker->level;
-					sprite_t* spr;
-					switch (attacker->rival_type) {
-						case SATURN:
-							spr = logo_saturn;
-							break;
-						case PLAYSTATION:
-							spr = logo_playstation;
-							break;
-					}
-					rdpq_sprite_blit(spr, x, y, &(rdpq_blitparms_t) {
-						.scale_x = s, .scale_y = s,
-					});
-				}
-			//}
+				rdpq_set_mode_standard();
+				rdpq_sprite_blit(spr, x, y, &(rdpq_blitparms_t) {
+					.scale_x = s, .scale_y = s,
+				});
+			}
+
+			if (i == reset_console) {
+				draw_bars(exception_reset_time()/2);
+			}
 
 			rdpq_detach();
 		}
@@ -1257,6 +1243,13 @@ void render_3d() {
 
 				overheat_t* overheat = &console_overheat[i];
 				float noise_strength = 0.2f * (1 + overheat->overheat_level);
+
+				if (i == reset_console) {
+					// Quickly remove noise on the console's screen
+					noise_strength -= noise_strength * exception_reset_time() / RESET_TIME_LENGTH;
+					if (noise_strength < 0)	noise_strength = 0;
+				}
+
 				uint8_t blend = (uint8_t)(noise_strength * 255.4f);
     			rdpq_set_prim_color(RGBA32(blend, blend, blend, 255 - blend));
 				rspq_block_run(console->displayable->dpl);
@@ -1316,19 +1309,20 @@ void render_2d() {
 	if (heap_size > 4*1024*1024) {
 		heap_size -= 4*1024*1024;
 	}
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 160, "Reset console : %ld", reset_console);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 160, "Reset console : %d", reset_console);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 170, "    Boot type : %s", rst == RESET_COLD ? "COLD" : "WARM");
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 180, "     Restored : %ld/%ld/%ld/%ld", restored_global_state_count, restored_consoles_count, restored_attackers_count, restored_overheat_count);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 180, "     Restored : %d/%d/%d/%d", restored_global_state_count, restored_consoles_count, restored_attackers_count, restored_overheat_count);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 190, "       Resets : %ld/%d-%d-%d-%d", global_state.reset_count, global_state.level_reset_count_per_console[0], global_state.level_reset_count_per_console[1], global_state.level_reset_count_per_console[2], global_state.level_reset_count_per_console[3]);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 200, " Power cycles : %ld/%d", global_state.power_cycle_count, global_state.level_power_cycle_count);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 210, "    Heap size : %d", heap_size);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 220, "    Allocated : %d", stats.used);
 
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 160, "State     : %d", global_state.game_state);
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 170, "Level     : %d", global_state.current_level);
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 180, "Port      : %d", current_joypad);
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 190, "Joypads   : %d/%d/%d/%d", joypad_is_connected(JOYPAD_PORT_1), joypad_is_connected(JOYPAD_PORT_2), joypad_is_connected(JOYPAD_PORT_3), joypad_is_connected(JOYPAD_PORT_4));
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 200, "Consoles  : %ld", consoles_count);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 150, "State     : %d", global_state.game_state);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 160, "Level     : %d", global_state.current_level);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 170, "Port      : %d", current_joypad);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 180, "Joypads   : %d/%d/%d/%d", joypad_is_connected(JOYPAD_PORT_1), joypad_is_connected(JOYPAD_PORT_2), joypad_is_connected(JOYPAD_PORT_3), joypad_is_connected(JOYPAD_PORT_4));
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 190, "Consoles  : %ld", consoles_count);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 200, "Reset ticks: %d", reset_ticks);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 210, "Reset held: %ldms", held_ms);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 220, "FPS   : %.2f", display_get_fps());
 
@@ -1364,7 +1358,7 @@ void render_2d() {
 						if (i == current_joypad && j == 0) {
 							drawprogress(x - (8*s), y - (8*s), s, holding, RGBA32(255, 0, 0, 255));
 						}
-						sprite_t* spr;
+						sprite_t* spr = NULL;
 						switch (btn) {
 							case BTN_A:
 								spr = spr_a;
@@ -1408,7 +1402,8 @@ void render_2d() {
 }
 
 int main(void) {
-	held_ms = TICKS_TO_MS(TICKS_READ());
+	held_ms = TICKS_TO_MS(TICKS_SINCE(reset_ticks));
+	reset_ticks = 0;
 	rst = sys_reset_type();
 	// TODO Treat separately cold, lukewarm (cold with remaining data in ram), and warm boots
 	if (rst == RESET_COLD) {
@@ -1444,12 +1439,6 @@ int main(void) {
     register_VI_handler((void(*)(void))rand);
 
 	debugf_uart("Seed OK\n");
-
-	tv_type = get_tv_type();
-	vi_period = TICKS_FROM_MS(tv_type == TV_PAL ? VI_PERIOD_PAL : VI_PERIOD_NTSC_MPAL);
-    //register_VI_handler((void(*)(void))monitor_reset_grace_period);
-
-	debugf_uart("Boot type OK\n");
 
 	display_init(RESOLUTION_320x240, DEPTH_16_BPP, FB_COUNT, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS);
 
@@ -1640,6 +1629,7 @@ int main(void) {
 	debugf_uart("Music playing OK\n");
 
 	wav64_open(&sfx_blip, "rom:/blip.wav64");
+	wav64_open(&sfx_crt_off, "rom://crt_off.wav64");
 
 	console_model = t3d_model_load("rom:/crt.t3dm");
 	n64_model = t3d_model_load("rom:/console.t3dm");
@@ -1688,7 +1678,7 @@ int main(void) {
 	
 	debugf_uart("Entering main loop\n");
 
-	while (true /*!in_reset*/) {
+	while (true) {
 		frameIdx = (frameIdx + 1) % FB_COUNT;
 		frametime = display_get_delta_time();
 		gtime += frametime;
@@ -1736,6 +1726,10 @@ int main(void) {
 	}
 	
 	debugf_uart("Out of main loop\n");
+	
+	// TODO Can we keep displaying while reset is held ?!
+	// 	--> show gauge for reset time
+	//	--> By writing over the last framebuffer with CPU only ?
 	
 	return 0;
 }
