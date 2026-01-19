@@ -102,7 +102,6 @@ const level_t levels[TOTAL_LEVELS] = {
 #define MAX_CONSOLES (4)
 #define CONSOLE_REPLICAS (10)
 
-// Struct to hold runtime stuff (model, display list, ...)
 typedef struct {
     // CRT model
 	T3DModel* model;
@@ -219,7 +218,6 @@ int current_joypad = -1;
 float holding = 0.0f;
 uint32_t held_ms;
 reset_type_t rst;
-//volatile bool in_reset;
 bool wrong_joypads_count = false;
 bool paused_wrong_joypads_count = false;
 
@@ -874,7 +872,6 @@ void update() {
 				joypad_buttons_t pressed = joypad_get_buttons_pressed(current_joypad);
 				if (pressed.a || pressed.start) {
 					// Load next level
-					//clear_level();
 					int next_level = global_state.current_level + 1;
 					if (next_level < TOTAL_LEVELS) {
 						load_level(next_level);
@@ -974,7 +971,7 @@ static void drawprogress(int x, int y, float scale, float progress, color_t col)
 
 static void gradient_smoke(uint8_t *color, float t, int heat_level) {
     t = fminf(1.0f, fmaxf(0.0f, t));
-	// Dark gray to light gray
+	// Gray to red-ish
 	color[0] = (uint8_t)(50 * heat_level + 100 * t);
 	color[1] = (uint8_t)(50 + 100 * t);
 	color[2] = (uint8_t)(50 + 100 * t);
@@ -1245,6 +1242,7 @@ void render_3d() {
 void render_2d() {
 	rdpq_sync_pipe();
 
+#ifdef DEBUG_MODE
 	heap_stats_t stats;
 	sys_get_heap_stats(&stats);
 	int heap_size = stats.total;
@@ -1267,6 +1265,7 @@ void render_2d() {
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 200, "Reset ticks: %d", reset_ticks);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 210, "Reset held: %ldms", held_ms);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 220, "FPS   : %.2f", display_get_fps());
+#endif
 
 	switch (global_state.game_state) {
 		case INTRO:
@@ -1318,6 +1317,10 @@ void render_2d() {
 								spr = spr_c_down;
 								break;
 						}
+						rdpq_mode_begin();
+							rdpq_set_mode_standard();
+							rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+						rdpq_mode_end();
 						rdpq_sprite_blit(spr, x, y, &(rdpq_blitparms_t) {
 							.scale_x = s, .scale_y = s,
 						});
@@ -1383,10 +1386,6 @@ int main(void) {
     register_VI_handler((void(*)(void))rand);
 
 	debugf_uart("Seed OK\n");
-
-	display_init(RESOLUTION_320x240, DEPTH_16_BPP, FB_COUNT, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS);
-
-	debugf_uart("Display init OK\n");
 
 	// Skip restoration / force cold boot behaviour by holding R+A during startup
 	bool forceColdBoot;
@@ -1458,9 +1457,6 @@ int main(void) {
 				console_t* console = &consoles[id];
 				*console = restored_consoles[i];
 				debugf_uart("restored: %d\n", console->id);
-				//debugf_uart("rotation: %f %f %f\n", console->rotation.x, console->rotation.y, console->rotation.z);
-				//debugf_uart("position: %f %f %f\n", console->position.x, console->position.y, console->position.z);
-				//debugf_uart("rot_speed: %f\n", console->rot_speed);
 				console->displayable = &console_displayables[i];
 				// Recreate replicas (alternative would be to keep replicas as-is)
 				replicate_console(console);
@@ -1518,8 +1514,10 @@ int main(void) {
 
 	if (!restored_ok) {
 		debugf_uart("Entering initial boot sequence\n");
-		//n64brew_logo();
-		//libdragon_logo();
+#ifndef DEBUG_MODE
+		n64brew_logo();
+		libdragon_logo();
+#endif
 
 		// Initial setup
 		consoles_count = 0;
@@ -1530,7 +1528,9 @@ int main(void) {
 
 	dump_game_state();
 	
-	//display_init(RESOLUTION_320x240, DEPTH_16_BPP, FB_COUNT, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS);
+	display_init(RESOLUTION_320x240, DEPTH_16_BPP, FB_COUNT, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS);
+
+	debugf_uart("Display init OK\n");
 
 	t3d_init((T3DInitParams){});
 	viewport = t3d_viewport_create_buffered(FB_COUNT);
@@ -1546,9 +1546,6 @@ int main(void) {
 	tpx_init((TPXInitParams){});
 	
 	debugf_uart("TPX init OK\n");
-
-	//audio_init(44100, 4);
-	//mixer_init(20);
     
 	if (global_state.game_state == IN_GAME) {
 		play_ingame_music();
