@@ -28,6 +28,8 @@ void debugf_uart(char* format, ...) {
 #define SFX_CHANNEL 0
 #define FONT_HALODEK 2
 
+#define BUTTON_HOLD_THRESHOLD 0.4f
+
 T3DViewport viewport;
 T3DVec3 camPos = {{ 0.0f, 10.0f, 60.0f }};
 T3DVec3 camTarget = {{0,0,0}};
@@ -64,34 +66,6 @@ static sprite_t* spr_circlemask;
 static sprite_t* spr_swirl;
 
 static rdpq_font_t *font_halo_dek;
-
-// TODO Game data structures
-
-// TODO Game state (intro, menu, playing)
-// TODO Current level
-// TODO Game mechanics:
-// 	- attackers gather around each console, destroying it (screen glitches, etc.)
-//	- player positions in front of a console and presses A-A-A-... to battle attackers
-//	- player can reset the current console (removes a lot of attackers) --> each console once? good timing (gauge, visual hint color/size/movement, ...) ??
-// 	- player can power cycle the console <n> times per level max. malus system (stuck console, unusable during <n> seconds) ??
-//	- goal: survive a given time? heal all consoles?
-//	- position in front of a console by plugging the (sole) controller in the corresponding port?
-//		- joypad_is_connected on every frame + use the correct port
-//		- is it ok to unplug/plug when console is running / probing?
-//		- message if too many controllers plugged (pause game)
-//		- 
-// TODO Sign IPL3 ??
-// TODO High persistence:
-//	- Variables in .persistent
-// 	- Count for each actor ? --> to know how much was lost during power off ??
-//	- Spread across multiple heaps
-//	- Target high persistence areas (0x80400000, ...)
-// TODO Dev mode (L+R+Z):
-//	- Force memory decay manually ?
-//	- Select current console with D-Pad
-// TODO Need to clear/invalidate replicas when deleting an actor !!
-
-// TODO on reset, animate screen bars ON THE SELECTED CONSOLE --> add bars on the OFFSCREEN surface + remove noise !
 
 
 typedef enum {
@@ -150,7 +124,6 @@ typedef struct {
     T3DVec3 rotation;
     T3DVec3 position;
 	float rot_speed;
-	// TODO T3DSkeleton, T3DAnim, wav64_t, c2AABB, ...
 	// Exclude remaining fields from replication
 	char __exclude;
 	displayable_t* displayable;	// Link to the displayable data is stale and must updated when restoring
@@ -222,12 +195,8 @@ typedef struct {
 #define OVERHEAT_PAYLOAD_SIZE (sizeof(overheat_t)-(sizeof(overheat_t)-offsetof(overheat_t, __exclude)))
 
 
-// TODO Static or dynamic allocation ?
-// TODO Dynamic arrays for consoles, attackers, overheat, ...
 console_t consoles[MAX_CONSOLES];
 displayable_t console_displayables[MAX_CONSOLES];
-
-// TODO Need to restore attackers and queues too (but partially ? truncated depending on hold time when using reset ?)
 attacker_t console_attackers[MAX_CONSOLES];
 overheat_t console_overheat[MAX_CONSOLES];
 
@@ -289,7 +258,6 @@ global_state_t global_state;
 
 
 
-// TODO Dump everytime something happens? on each frame?
 void dump_game_state() {
 #if 0	
 	debugf_uart("==========\n");
@@ -452,15 +420,13 @@ void dynamic_tex_cb(void* userData, const T3DMaterial* material, rdpq_texparms_t
 
 void setup_console(int i, console_t* console) {
 	displayable_t* displayable = console->displayable;
-	displayable->model = console_model;	//t3d_model_load("rom:/crt.t3dm");	//console_model; // TODO FREE
+	displayable->model = console_model;
 	displayable->mat_fp = malloc_uncached(sizeof(T3DMat4FP) * FB_COUNT);
 	displayable->skel = t3d_skeleton_create_buffered(displayable->model, 1 /* FIXME FB_COUNT*/);
 	displayable->bone = t3d_skeleton_find_bone(&displayable->skel, "console");
 	displayable->offscreen_surf = surface_alloc(FMT_RGBA16, OFFSCREEN_SIZE, OFFSCREEN_SIZE);
 	displayable->offscreen_surf_z = surface_alloc(FMT_RGBA16, OFFSCREEN_SIZE, OFFSCREEN_SIZE);
 	rspq_block_begin();
-		//t3d_matrix_push(&displayable->mat_fp[frameIdx]);
-		// TODO the model uses the prim. color to blend between the offscreen-texture and white-noise
 		t3d_model_draw_custom(displayable->model, (T3DModelDrawConf){
 			.userData = &displayable->offscreen_surf,
 			.dynTextureCb = dynamic_tex_cb,
@@ -468,7 +434,6 @@ void setup_console(int i, console_t* console) {
 				? displayable->skel.boneMatricesFP
 				: (const T3DMat4FP*)t3d_segment_placeholder(T3D_SEGMENT_SKELETON)
 		});
-		//t3d_matrix_pop(1);
 	displayable->dpl = rspq_block_end();
 
 	displayable->model2 = n64_model;
@@ -480,7 +445,7 @@ void setup_console(int i, console_t* console) {
 	particles_t* particles = &console_particles[i];
 	uint32_t allocSize = sizeof(TPXParticleS8) * particleCountMax / 2;
 	debugf_uart("allocSize=%d\n", allocSize);
-	particles->buffer = malloc_uncached(allocSize);	// TODO memset to 0 ??
+	particles->buffer = malloc_uncached(allocSize);
 	memset(particles->buffer, 0, allocSize);
 	particles->mat_fp = malloc_uncached(sizeof(T3DMat4FP) * FB_COUNT);
 }
@@ -515,8 +480,6 @@ void shrink_attacker(int idx) {
 			debugf_uart("shrink %d: despawn\n", idx);
 		}
 		update_attacker(attacker);
-		// FIXME depsawned --> will trigger new spawn and replication !!
-		// NEED TO CLEAN REPLICAS
 		// TODO Simplify this mess --> always replicate all attackers when starting a new level?
 		erase_and_free_replicas(&heap2, attacker->replicas, ATTACKER_REPLICAS);
 	}
@@ -591,7 +554,7 @@ void increase_overheat(int idx) {
 		overheat->overheat_level++;
 		overheat->last_overheat = gtime;
 		debugf_uart("increase heat %d: level=%d\n", idx, overheat->overheat_level);
-		// TODO replicate on first spawn ? update otherwise
+		// Replicate on first spawn, update otherwise
 		if (overheat->replicas[0] == NULL) {
 			replicate_overheat(overheat);
 		} else {
@@ -606,7 +569,7 @@ void decrease_overheat(int idx) {
 		overheat->overheat_level--;
 		overheat->last_overheat = gtime;	// To avoid immediate increase (TODO Add grace period of a few additional seconds?)
 		debugf_uart("decrease heat %d: level=%d\n", idx, overheat->overheat_level);
-		// TODO replicate on first spawn ? update otherwise
+		// Replicate on first spawn, update otherwise
 		if (overheat->replicas[0] == NULL) {
 			replicate_overheat(overheat);
 		} else {
@@ -714,12 +677,11 @@ void clear_level() {
 	debugf_uart("Clearing level %d\n", global_state.current_level);
 	const level_t* level = &levels[global_state.current_level];
 	debugf_uart("Erasing %d/%d consoles\n", consoles_count, level->consoles_count);
-	int count = consoles_count;	// FIXME We may have lost consoles during a reset !!
+	int count = consoles_count;
 	for (int i=0; i<count; i++) {
 		console_t* console = &consoles[i];
 		erase_and_free_replicas(&heap1, console->replicas, CONSOLE_REPLICAS);
 		displayable_t* displayable = console->displayable;
-		// FIXME ! t3d_model_free(displayable->model);
 		free_uncached(displayable->mat_fp);
 		t3d_skeleton_destroy(&displayable->skel);
 		surface_free(&displayable->offscreen_surf);
@@ -759,7 +721,7 @@ static void play_ingame_music() {
 	stop_music();
 	xm64player_open(&music, "rom:/flyaway.xm64");
     xm64player_set_loop(&music, true);
-    xm64player_set_vol(&music, 0.55);	// FIXME
+    xm64player_set_vol(&music, 0.55);
 	xm64player_play(&music, MUSIC_CHANNEL);
 }
 
@@ -767,18 +729,18 @@ static void play_menu_music() {
 	stop_music();
     xm64player_open(&music, "rom:/inmemory.xm64");
     xm64player_set_loop(&music, true);
-    xm64player_set_vol(&music, 0.55);	// FIXME
+    xm64player_set_vol(&music, 0.55);
 	xm64player_play(&music, MUSIC_CHANNEL);
 }
 
 void update() {
-	// TODO Move camera?
 	t3d_viewport_set_projection(&viewport, T3D_DEG_TO_RAD(85.0f), 10.0f, 150.0f);
 	t3d_viewport_look_at(&viewport, &camPos, &camTarget, &(T3DVec3){{0,1,0}});
 
 	switch (global_state.game_state) {
 		case INTRO: {
-			if (current_joypad != -1) {
+			// Only accept first controller to start the game
+			if (current_joypad == 0) {
 				joypad_buttons_t pressed = joypad_get_buttons_pressed(current_joypad);
 				if (pressed.a || pressed.start) {
 					// Load level 1
@@ -792,16 +754,6 @@ void update() {
 		case IN_GAME: {
 			set_level_timer(global_state.level_timer - frametime);
 			bool cleared = (global_state.level_timer < 0.0f);
-
-			// TODO Play model animation --> shake when attacked ? shaking grows with attacker level?
-			// Move models TODO
-			/*for (int i=0; i<consoles_count; i++) {
-				console_t* console = &consoles[i];
-				console->rotation.x -= console->rot_speed * 0.2f;
-				console->rotation.y -= console->rot_speed;
-				// Need to update replicas with new values
-				update_console(console);
-			}*/
 
 			// Spawn attackers and add attacks
 			const level_t* level = &levels[global_state.current_level];
@@ -818,7 +770,7 @@ void update() {
 				}
 				if (attacker->spawned && attacker->level == QUEUE_LENGTH && overheat->last_overheat + level->overheat_pediod <= gtime) {
 					increase_overheat(i);
-					// TODO Game over if reached level 4 ?
+					// Game over if reached level 4
 					if (console_overheat[i].overheat_level > 3) {
 						debugf_uart("OVERHEAT GAME OVER %d\n", i);
 						clear_level();
@@ -826,7 +778,6 @@ void update() {
 						set_game_state(GAME_OVER);
 					}
 				}
-				// TODO Decrease current console's heat on reset (the one that was selected when pressing reset!)
 			}
 
 			// Handle inputs
@@ -853,7 +804,7 @@ void update() {
 					}
 					if (held) {
 						holding += frametime;
-						if (holding >= 1.0f) {	// TODO Threshold depending on enemy strength
+						if (holding >= BUTTON_HOLD_THRESHOLD) {	// TODO Threshold depending on enemy strength
 							shrink_attacker(current_joypad);
 							holding = 0;
 						}
@@ -862,6 +813,8 @@ void update() {
 					}
 				}
 
+#ifdef DEBUG_MODE
+				// Debug commands
 				if (pressed.r) {
 					// Spawn attacker
 					int idx = current_joypad;
@@ -882,7 +835,7 @@ void update() {
 					// Increase heat
 					int idx = current_joypad;
 					increase_overheat(idx);
-					// TODO Game over if reached level 4 ?
+					// Game over if reached level 4
 					if (console_overheat[idx].overheat_level > 3) {
 						debugf_uart("OVERHEAT GAME OVER %d\n", idx);
 						clear_level();
@@ -898,15 +851,14 @@ void update() {
 					}
 				}
 				if (pressed.start) {
-					// FIXME remove
 					cleared = true;
 				}
+#endif
 			}
 
-			// TODO Handle end condition and change level
+			// Handle end condition and change level
 			if (cleared) {
 				set_game_state(LEVEL_CLEARED);
-				// TODO unload level immediately ?
 				// TODO Keep level displayed for a few seconds, clear when loading the next level
 				clear_level();
 				play_menu_music();
@@ -938,7 +890,6 @@ void update() {
 				joypad_buttons_t pressed = joypad_get_buttons_pressed(current_joypad);
 				if (pressed.start) {
 					// TODO Reinitialize game data
-					// FIXME current_level = 0;
 					set_game_state(INTRO);
 					wav64_play(&sfx_blip, SFX_CHANNEL);
 				}
@@ -950,7 +901,6 @@ void update() {
 				joypad_buttons_t pressed = joypad_get_buttons_pressed(current_joypad);
 				if (pressed.start) {
 					// TODO Reinitialize game data
-					// FIXME current_level = 0;
 					set_game_state(INTRO);
 					wav64_play(&sfx_blip, SFX_CHANNEL);
 				}
@@ -1067,22 +1017,17 @@ static void simulate_particles_smoke(particles_t* particles, int heat_level, flo
 }
 
 static void drawsmoke(particles_t* particles, T3DVec3 position, int heat_level) {
-	//particleRot = (T3DVec3){{0,0,0}};
 	particles->tpx_time += frametime * 1.0f;
 	particles->timeTile += frametime * 25.1f;
-	particles->particleCount = 24 * heat_level;	// TODO Change scale too? FIXME Handle size change ??
-	// FIXME console position !
-	float posX = position.x;// fm_cosf(tpx_time) * 80.0f;
-	float posZ = position.z;//fm_sinf(2*tpx_time) * 40.0f;
+	particles->particleCount = 24 * heat_level;
+	// Move a little around console position ?
+	float posX = position.x + fm_cosf(particles->tpx_time) * 5.0f;
+	float posZ = position.z + fm_sinf(2*particles->tpx_time) * 5.0f;
 
 	rdpq_mode_push();
 
 	simulate_particles_smoke(particles, heat_level, posX, posZ);
-	//particleMatScale = (T3DVec3){{0.9f, partMatScaleVal, 0.9f}};
-	//particlePos.y = partMatScaleVal * 130.0f;
 	rdpq_set_env_color((color_t){0xFF, 0xFF, 0xFF, 0xFF});
-	//isSpriteRot = true;
-
 
     rdpq_sync_pipe();
     rdpq_sync_tile();
@@ -1124,9 +1069,9 @@ static void drawsmoke(particles_t* particles, T3DVec3 position, int heat_level) 
     tpx_state_from_t3d();
     
 	t3d_mat4fp_from_srt_euler(&particles->mat_fp[frameIdx],
-		(float[3]){ 3, 3, 3 },
+		(float[3]){ 6, 6, 6 },
 		(float[3]){ 0.0f, 0.0f, 0.0f },
-		(float[3]){ 0.0f, 500.0f, 0.0f }
+		(float[3]){ 0.0f, 850.0f, 0.0f }
 	);
 	tpx_matrix_push(&particles->mat_fp[frameIdx]);
 	
@@ -1226,20 +1171,16 @@ void render_3d() {
 		case IN_GAME: {
 			draw_bg(bg_pattern, bg_gradient, gtime * 4.0f);
 			for (int i=0; i<consoles_count; i++) {
-				//rdpq_sync_pipe();
 				console_t* console = &consoles[i];
 				t3d_skeleton_update(&console->displayable->skel);
 				t3d_mat4fp_from_srt_euler(
 					&console->displayable->mat_fp[frameIdx],
 					console->scale.v,
 					console->rotation.v,
-					//(float[3]){ 0.0f, M_PI/4.0f, 0.0f },
 					console->position.v
 				);
-				// FIXME ??? rdpq_set_prim_color(console->color);
 				t3d_matrix_push(&console->displayable->mat_fp[frameIdx]);
       			t3d_skeleton_use(&console->displayable->skel);
-				//rdpq_set_prim_color(RGBA32(0, 255, 0, 255));
 
 				overheat_t* overheat = &console_overheat[i];
 				float noise_strength = 0.2f * (1 + overheat->overheat_level);
@@ -1250,14 +1191,13 @@ void render_3d() {
 					if (noise_strength < 0)	noise_strength = 0;
 				}
 
+				// CRT model uses primary color to blend texture and noise
 				uint8_t blend = (uint8_t)(noise_strength * 255.4f);
     			rdpq_set_prim_color(RGBA32(blend, blend, blend, 255 - blend));
 				rspq_block_run(console->displayable->dpl);
 				
 				if(console->displayable->bone >= 0) {
-					//rdpq_sync_pipe();
   					rdpq_mode_push();
-					//rdpq_sync_pipe();
 					float s = 8.0f;
 					t3d_mat4fp_from_srt_euler(
 						&console->displayable->mat_fp2[frameIdx],
@@ -1269,10 +1209,10 @@ void render_3d() {
 					// to attach another model, simply use a bone form the skeleton:
 					t3d_matrix_push(&console->displayable->skel.boneMatricesFP[console->displayable->bone]);
 					t3d_matrix_push(&console->displayable->mat_fp2[frameIdx]); // apply local matrix of the model
-					//rdpq_set_prim_color(RGBA32(255, 0, 0, 255));
-					//rdpq_sync_pipe();
 					if (current_joypad == i) {
 						rdpq_set_prim_color(RGBA32(0, 200, 0, 255));
+					} else {
+						rdpq_set_prim_color(RGBA32(0, 0, 0, 255));
 					}
 					rspq_block_run(console->displayable->dpl2);
 					rdpq_sync_pipe();
@@ -1285,7 +1225,6 @@ void render_3d() {
 
 					t3d_matrix_pop(2);
   					rdpq_mode_pop();
-					//rdpq_sync_pipe();
 				}
 				t3d_matrix_pop(1);
 			}
@@ -1329,6 +1268,9 @@ void render_2d() {
 	switch (global_state.game_state) {
 		case INTRO:
 			rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 40, 100, "Bla bla bla... explain game");
+			if (current_joypad != 0) {
+				rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 40, 120, "Please make sure to plug a single controller to the first port");
+			}
 			break;
 		case IN_GAME: {
 			if (paused_wrong_joypads_count) {
@@ -1356,7 +1298,7 @@ void render_2d() {
 					for (int j=0; j<attacker->level; j++) {
 						queue_button_t btn = get_attacker_button(i, j);
 						if (i == current_joypad && j == 0) {
-							drawprogress(x - (8*s), y - (8*s), s, holding, RGBA32(255, 0, 0, 255));
+							drawprogress(x - (8*s), y - (8*s), s, holding/BUTTON_HOLD_THRESHOLD, RGBA32(255, 0, 0, 255));
 						}
 						sprite_t* spr = NULL;
 						switch (btn) {
@@ -1405,7 +1347,6 @@ int main(void) {
 	held_ms = TICKS_TO_MS(TICKS_SINCE(reset_ticks));
 	reset_ticks = 0;
 	rst = sys_reset_type();
-	// TODO Treat separately cold, lukewarm (cold with remaining data in ram), and warm boots
 	if (rst == RESET_COLD) {
 		held_ms = 0;
 	}
@@ -1429,7 +1370,7 @@ int main(void) {
 
 	debugf_uart("Init OK\n");
 
-	//rdpq_debug_start();	// TODO Debug only
+	//rdpq_debug_start();
 
     // Initialize the random number generator, then call rand() every
     // frame so to get random behavior also in emulators.
@@ -1444,7 +1385,7 @@ int main(void) {
 
 	debugf_uart("Display init OK\n");
 
-	// TODO Skip restoration / force cold boot behaviour by holding R+A during startup ?
+	// Skip restoration / force cold boot behaviour by holding R+A during startup
 	bool forceColdBoot;
 	joypad_poll();
 	JOYPAD_PORT_FOREACH(port) {
@@ -1462,7 +1403,6 @@ int main(void) {
 	attacker_t restored_attackers[MAX_CONSOLES];
 	overheat_t restored_overheat[MAX_CONSOLES];
 
-	// TODO Also CLEAR the memory heaps ??
 	if (!forceColdBoot) {
 		// Restore game data from heap replicas
 		// FIXME Restoration is BROKEN
@@ -1473,23 +1413,19 @@ int main(void) {
 		restored_attackers_count = restore(&heap2, restored_attackers, ATTACKER_PAYLOAD_SIZE, sizeof(attacker_t), MAX_CONSOLES, ATTACKER_MAGIC, ATTACKER_MASK);
 		restored_overheat_count = restore(&heap2, restored_overheat, OVERHEAT_PAYLOAD_SIZE, sizeof(overheat_t), MAX_CONSOLES, OVERHEAT_MAGIC, OVERHEAT_MASK);
 	} else {
-		// TODO Clean all variables (held_ms, ...) and memory heaps ?!
+		// TODO Clean all variables (held_ms, ...)
 	}
 
 	debugf_uart("Restoration OK\n");
 
-	// TODO Need to CLEAR ALL REPLICAS to avoid bad data in next restoration !
+	// Clear all replicas to avoid bad data in next restoration
 	debugf_uart("Clearing heaps\n");
 	clear_heaps();
 	debugf_uart("Heaps cleared\n");
 
-	// TODO Dump details restored data (button queues, overheat levels, level, timer, ...)
-	// TODO Also dump in the same format during gameplay (every second or so? on every replica update?)
-
 	bool restored_ok = false;
 	if (restored_global_state_count == 1) {
 		debugf_uart("Entering followup boot sequence\n");
-		// TODO Make sure enough data was recovered: current_level, game_state, ... --> REPLICAS + RESTORE !!
 
 		debugf_uart("restored: %d global state / %d consoles / %d attackers / %d overheat\n", restored_global_state_count, restored_consoles_count, restored_attackers_count, restored_overheat_count);
 
@@ -1501,7 +1437,6 @@ int main(void) {
 			if (restored_consoles_count != level->consoles_count) {
 				debugf_uart("FAILED TO RESTORE ALL CONSOLES !!! %d != %d\n", restored_consoles_count, level->consoles_count);
 				// TODO Should show game over ?
-				// TODO FAIL! GAME OVER ! RESTART GAME !
 				debugf_uart("BROKEN: fallback to initial boot sequence\n");
 				broken_level = true;
 			}
@@ -1512,8 +1447,6 @@ int main(void) {
 
 			debugf_uart("game_state: %d\n", global_state.game_state);
 			debugf_uart("reset_console: %d\n", reset_console);
-
-			// TODO Support restarting to level cleared screen ??
 
 			// Restored at least once console: keep playing
 			consoles_count = restored_consoles_count;
@@ -1536,8 +1469,6 @@ int main(void) {
 				attacker_t* attacker = &console_attackers[id];
 				*attacker = restored_attackers[i];
 				debugf_uart("restored attacker: %d\n", attacker->id);
-				// TODO instead of replicating, just keep track of the resored _valid_ replicas ?
-				// TODO Only replicate spawned attackers?
 				if (attacker->spawned) {
 					replicate_attacker(attacker);
 				} else {
@@ -1545,13 +1476,11 @@ int main(void) {
 				}
 			}
 
-			// TODO restored attackers MAY NOT BE ORDERED
 			for (int i=0; i<restored_overheat_count; i++) {
 				uint32_t id = restored_overheat[i].id;
 				overheat_t* overheat = &console_overheat[id];
 				*overheat = restored_overheat[i];
 				debugf_uart("restored overheat: %d\n", overheat->id);
-				// TODO instead of replicating, just keep track of the resored _valid_ replicas ?
 				replicate_overheat(overheat);
 				
 				// Decrease overheat level of console depending on held_ms
@@ -1574,8 +1503,6 @@ int main(void) {
 				debugf_uart("Warm\n");
 				inc_reset_count();
 				inc_level_reset_count_per_console(reset_console);
-				//level_reset_count_per_console++;
-				// Counter was already incremented in reset IRQ handler
 				// TODO Handle too many resets in level --> game over? penalty?
 			}
 
@@ -1658,7 +1585,6 @@ int main(void) {
 
 	// Happens only on reset
 	// Load model for each console
-	// TODO Only ig in-game !
 	if (global_state.game_state == IN_GAME) {
 		for (int i=0; i<consoles_count; i++) {
 			setup_console(i, &consoles[i]);
@@ -1693,15 +1619,16 @@ int main(void) {
 			}
 		}
 		wrong_joypads_count = ports > 1;
-		/*if (wrong_joypads_count) {
+#ifndef DEBUG_MODE
+		if (wrong_joypads_count) {
 			current_joypad = -1;
-			// TODO Pause game and display message
-			//debugf_uart("Please plug only one joypad\n");
+			// Pause game and display message
 			if (!global_state.wrong_joypads_count_displayed) {
 				paused_wrong_joypads_count = true;
 				set_wrong_joypads_count_displayed(true);
 			}
-		} else {*/
+		} else {
+#endif
 			paused_wrong_joypads_count = false;
 			current_joypad = -1;
 			JOYPAD_PORT_FOREACH(port) {
@@ -1709,7 +1636,9 @@ int main(void) {
 					current_joypad = port;
 				}
 			}
-		//}
+#ifndef DEBUG_MODE
+		}
+#endif
 
 		joypad_poll();
 		if (!paused_wrong_joypads_count) {
