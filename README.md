@@ -33,6 +33,7 @@ In-game: ["Fly away" by Shiru Otaku (DJ Uranus)](https://modarchive.org/index.ph
 ## Sound FX
 
 Blip: [from the N64brew-GameJam2024](https://github.com/n64brew/N64brew-GameJam2024)
+CRT turning off: ["Cathode screen off #3" by Joseph SARDIN](https://bigsoundbank.com/cathode-screen-off-3-s1785.html)
 
 ## Models
 
