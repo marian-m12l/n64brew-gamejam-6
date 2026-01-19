@@ -43,6 +43,15 @@ void n64brew_logo(void)
     int anim_part = 0;
     while (1)
     {
+        // Skip logo on button press
+        joypad_poll();
+        joypad_buttons_t btn = joypad_get_buttons_pressed(JOYPAD_PORT_1);
+        if (btn.a || btn.b || btn.start) {
+            rdpq_attach_clear(display_get(), NULL);
+            rdpq_detach_show();
+            break;
+        }
+
         float tt = get_ticks_ms() - mt0;
         if (tt < 1500) {
             anim_part = 0;
@@ -160,6 +169,15 @@ void libdragon_logo(void)
     reset();
     while (1) {
         mixer_try_play();
+
+        // Skip logo on button press
+        joypad_poll();
+        joypad_buttons_t btn = joypad_get_buttons_pressed(JOYPAD_PORT_1);
+        if (btn.a || btn.b || btn.start) {
+            rdpq_attach_clear(display_get(), NULL);
+            rdpq_detach_show();
+            break;
+        }
         
         // Calculate animation part:
         // 0: rotate dragon head
