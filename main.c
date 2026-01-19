@@ -50,6 +50,7 @@ static float gtime;
 static xm64player_t music;
 static wav64_t sfx_blip;
 static wav64_t sfx_crt_off;
+static wav64_t sfx_gameover;
 
 
 static sprite_t* logo_n64;
@@ -774,7 +775,8 @@ void update() {
 					if (console_overheat[i].overheat_level > 3) {
 						debugf_uart("OVERHEAT GAME OVER %d\n", i);
 						clear_level();
-						play_menu_music();	// TODO game over music
+						wav64_play(&sfx_gameover, SFX_CHANNEL);
+						play_menu_music();
 						set_game_state(GAME_OVER);
 					}
 				}
@@ -839,7 +841,8 @@ void update() {
 					if (console_overheat[idx].overheat_level > 3) {
 						debugf_uart("OVERHEAT GAME OVER %d\n", idx);
 						clear_level();
-						play_menu_music();	// TODO game over music
+						wav64_play(&sfx_gameover, SFX_CHANNEL);
+						play_menu_music();
 						set_game_state(GAME_OVER);
 					}
 				}
@@ -1557,6 +1560,7 @@ int main(void) {
 
 	wav64_open(&sfx_blip, "rom:/blip.wav64");
 	wav64_open(&sfx_crt_off, "rom://crt_off.wav64");
+	wav64_open(&sfx_gameover, "rom://gameover.wav64");
 
 	console_model = t3d_model_load("rom:/crt.t3dm");
 	n64_model = t3d_model_load("rom:/console.t3dm");
