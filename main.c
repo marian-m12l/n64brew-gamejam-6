@@ -100,7 +100,7 @@ const level_t levels[TOTAL_LEVELS] = {
 #define CONSOLE_MASK (0xffffff00)
 
 #define MAX_CONSOLES (4)
-#define CONSOLE_REPLICAS (10)
+#define CONSOLE_REPLICAS (20)
 
 typedef struct {
     // CRT model
@@ -234,7 +234,7 @@ volatile uint32_t reset_ticks __attribute__((section(".persistent")));
 
 #define GLOBAL_STATE_MAGIC (0xaabbccdd)
 #define GLOBAL_STATE_MASK (0xffffffff)
-#define GLOBAL_STATE_REPLICAS (50)
+#define GLOBAL_STATE_REPLICAS (20)
 
 typedef struct {
 	game_state_t game_state;
@@ -304,7 +304,7 @@ void dump_game_state() {
 void replicate_global_state() {
 	debugf_uart("replicate global state\n");
 	replicate(&heap1, GLOBAL_STATE_MAGIC, &global_state, GLOBAL_STATE_PAYLOAD_SIZE, GLOBAL_STATE_REPLICAS, true, true, global_state.replicas);
-	debugf_uart("replicas: %p %p %p %p\n", global_state.replicas[0], global_state.replicas[1], global_state.replicas[2], global_state.replicas[3]);
+	debugf_uart("replicas: %p - %p\n", global_state.replicas[0], global_state.replicas[GLOBAL_STATE_REPLICAS-1]);
 	//dump_game_state();
 }
 
@@ -372,7 +372,7 @@ void set_wrong_joypads_count_displayed(bool b) {
 void replicate_console(console_t* console) {
 	debugf_uart("replicate console #%d\n", console->id);
 	replicate(&heap1, CONSOLE_MAGIC | console->id, console, CONSOLE_PAYLOAD_SIZE, CONSOLE_REPLICAS, true, true, console->replicas);
-	debugf_uart("replicas: %p %p %p %p\n", console->replicas[0], console->replicas[1], console->replicas[2], console->replicas[3]);
+	debugf_uart("replicas: %p - %p\n", console->replicas[0], console->replicas[CONSOLE_REPLICAS-1]);
 	//dump_game_state();
 }
 
@@ -453,7 +453,7 @@ void setup_console(int i, console_t* console) {
 void replicate_attacker(attacker_t* attacker) {
 	debugf_uart("replicate attacker #%d\n", attacker->id);
 	replicate(&heap2, ATTACKER_MAGIC | attacker->id, attacker, ATTACKER_PAYLOAD_SIZE, ATTACKER_REPLICAS, true, true, attacker->replicas);
-	debugf_uart("replicas: %p %p %p %p\n", attacker->replicas[0], attacker->replicas[1], attacker->replicas[2], attacker->replicas[3]);
+	debugf_uart("replicas: %p - %p\n", attacker->replicas[0], attacker->replicas[ATTACKER_REPLICAS-1]);
 	//dump_game_state();
 }
 
@@ -536,7 +536,7 @@ queue_button_t get_attacker_button(int idx, int i) {
 void replicate_overheat(overheat_t* overheat) {
 	debugf_uart("replicate overheat #%d\n", overheat->id);
 	replicate(&heap2, OVERHEAT_MAGIC | overheat->id, overheat, OVERHEAT_PAYLOAD_SIZE, OVERHEAT_REPLICAS, true, true, overheat->replicas);
-	debugf_uart("replicas: %p %p %p %p\n", overheat->replicas[0], overheat->replicas[1], overheat->replicas[2], overheat->replicas[3]);
+	debugf_uart("replicas: %p - %p\n", overheat->replicas[0], overheat->replicas[OVERHEAT_REPLICAS-1]);
 	//dump_game_state();
 }
 
@@ -1455,9 +1455,6 @@ int main(void) {
 
 	if (!forceColdBoot) {
 		// Restore game data from heap replicas
-		// FIXME Restoration is BROKEN
-		// FIXME Don't restore directly in rrays --> use a dedicated array, then update item in-place !!
-
 		restored_global_state_count = restore(&heap1, &restored_global_state, GLOBAL_STATE_PAYLOAD_SIZE, sizeof(global_state_t), 1, GLOBAL_STATE_MAGIC, GLOBAL_STATE_MASK);
 		restored_consoles_count = restore(&heap1, restored_consoles, CONSOLE_PAYLOAD_SIZE, sizeof(console_t), MAX_CONSOLES, CONSOLE_MAGIC, CONSOLE_MASK);
 		restored_attackers_count = restore(&heap2, restored_attackers, ATTACKER_PAYLOAD_SIZE, sizeof(attacker_t), MAX_CONSOLES, ATTACKER_MAGIC, ATTACKER_MASK);

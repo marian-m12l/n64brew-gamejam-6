@@ -40,15 +40,17 @@ static void* alloc_heap(heap_t* heap, int size, bool cached) {
 	while(heap->allocated[i] && i < heap->len) {
 		i++;
 	}
+	assert (i < heap->len);	// Fail if no slot available
 	heap->allocated[i] = true;
 	return cached ? &(heap->cache[i]) : &(heap->heap[i]);
 }
 
 static void free_heap(heap_t* heap, void* ptr) {
-	int i = (ptr - (void*)&heap->heap) / CHUNK_SIZE;
-	if (i < 0 || i > 1015) {
-		i = (ptr - (void*)&heap->cache) / CHUNK_SIZE;
+	int i = (ptr - (void*)heap->heap) / CHUNK_SIZE;
+	if (i < 0 || i > heap->len) {
+		i = (ptr - (void*)heap->cache) / CHUNK_SIZE;
 	}
+	assert (i < heap->len);	// Fail if no valid slot
 	heap->allocated[i] = false;
 }
 
