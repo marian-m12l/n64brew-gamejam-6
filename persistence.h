@@ -3,7 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define CHUNK_SIZE 128
+#define CHUNK_SIZE 64
 #define HEAP_COUNT (((2048-4)*1024)/CHUNK_SIZE)
 #define EXPANSION_HEAP_COUNT (((4096-64)*1024)/CHUNK_SIZE)
 

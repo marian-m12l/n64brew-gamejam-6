@@ -14,12 +14,12 @@ uint8_t cached_expansion_heap[EXPANSION_HEAP_COUNT][CHUNK_SIZE] __attribute__((s
 heap_t heap1 = {
 	.heap = rdram_heap,
 	.cache = cached_heap,
-	.len = 128
+	.len = 256
 };
 heap_t heap2 = {
-	.heap = &rdram_heap[128],
-	.cache = &cached_heap[128],
-	.len = HEAP_COUNT-128
+	.heap = &rdram_heap[256],
+	.cache = &cached_heap[256],
+	.len = HEAP_COUNT-256
 };
 
 heap_t heap3 = {
