@@ -31,7 +31,7 @@ void debugf_uart(char* format, ...) {
 #define BUTTON_HOLD_THRESHOLD 0.4f
 
 T3DViewport viewport;
-T3DVec3 camPos = {{ 0.0f, 10.0f, 60.0f }};
+T3DVec3 camPos = {{ 0.0f, 70.0f, 120.0f }};
 T3DVec3 camTarget = {{0,0,0}};
 uint8_t colorAmbient[4] = {80, 80, 100, 0xFF};
 uint8_t colorDir[4]     = {0xEE, 0xAA, 0xAA, 0xFF};
@@ -63,6 +63,8 @@ static sprite_t* spr_c_up;
 static sprite_t* spr_c_down;
 static sprite_t* spr_progress;
 static sprite_t* spr_circlemask;
+static sprite_t* spr_reset;
+static sprite_t* spr_power;
 
 static sprite_t* spr_swirl;
 
@@ -220,6 +222,7 @@ uint32_t held_ms;
 reset_type_t rst;
 bool wrong_joypads_count = false;
 bool paused_wrong_joypads_count = false;
+bool useExpansionPak;
 
 
 int restored_global_state_count;
@@ -598,6 +601,20 @@ static void reset_interrupt_callback(void) {
 	}
 }
 
+const float console_scales[MAX_CONSOLES] = { 0.18f, 0.18f, 0.13f, 0.10f };
+const T3DVec3 console_positions[MAX_CONSOLES][MAX_CONSOLES] = {
+	{ (T3DVec3){{0, 0, -25.0f}},		(T3DVec3){{0, 0, 0}}, 				(T3DVec3){{0, 0, 0}}, 				(T3DVec3){{0, 0, 0}} },
+	{ (T3DVec3){{-40.0f, 0, -25.0f}}, 	(T3DVec3){{40.0f, 0, -25.0f}},		(T3DVec3){{0, 0, 0}}, 				(T3DVec3){{0, 0, 0}} },
+	{ (T3DVec3){{-50.0f, 0, -10.0f}}, 	(T3DVec3){{0, 0, -40.0f}}, 			(T3DVec3){{50.0f, 0, -10.0f}},		(T3DVec3){{0, 0, 0}} },
+	{ (T3DVec3){{-50.0f, 0, 10.0f}}, 	(T3DVec3){{-22.0f, 0, -40.0f}},		(T3DVec3){{22.0f, 0, -40.0f}}, 		(T3DVec3){{50.0f, 0, 10.0f}} }
+};
+const T3DVec3 console_rotations[MAX_CONSOLES][MAX_CONSOLES] = {
+	{ (T3DVec3){{0, 0, 0}},							(T3DVec3){{0, 0, 0}}, 						(T3DVec3){{0, 0, 0}}, 						(T3DVec3){{0, 0, 0}} },
+	{ (T3DVec3){{0, T3D_DEG_TO_RAD(-10.0f), 0}}, 	(T3DVec3){{0, T3D_DEG_TO_RAD(10.0f), 0}},	(T3DVec3){{0, 0, 0}}, 						(T3DVec3){{0, 0, 0}} },
+	{ (T3DVec3){{0, T3D_DEG_TO_RAD(-30.0f), 0}}, 	(T3DVec3){{0, 0, 0}}, 						(T3DVec3){{0, T3D_DEG_TO_RAD(30.0f), 0}},	(T3DVec3){{0, 0, 0}} },
+	{ (T3DVec3){{0, T3D_DEG_TO_RAD(-45.0f), 0}}, 	(T3DVec3){{0, T3D_DEG_TO_RAD(-10.0f), 0}},	(T3DVec3){{0, T3D_DEG_TO_RAD(10.0f), 0}}, 	(T3DVec3){{0, T3D_DEG_TO_RAD(45.0f), 0}} }
+};
+
 void load_level(int next_level) {
 	debugf_uart("Loading level %d\n", next_level);
 	const level_t* level = &levels[next_level];
@@ -607,64 +624,11 @@ void load_level(int next_level) {
 		console_t* console = add_console();
 		setup_console(i, console);
 		// Position consoles
-		float scale = 0.18f * powf(0.7f, level->consoles_count);
-		float x_offset = 20.0f;
-		float y_offset = 15.0f;
+		float scale = console_scales[level->consoles_count-1];
 		console->scale = (T3DVec3){{ scale, scale, scale }};
-		console->rotation = (T3DVec3){{ 0.0f, 0.0f, 0.0f }};
+		console->rotation = console_rotations[level->consoles_count-1][i];
 		console->rot_speed = 0.0f;
-		switch (i) {
-			case 0: {
-				switch (level->consoles_count) {
-					case 1:
-						console->position = (T3DVec3){{ 0.0f, 0.0f, 0.0f }};
-						break;
-					case 2:
-						console->position = (T3DVec3){{ -1.0f * x_offset, 0.0f, 0.0f }};
-						break;
-					case 3:
-						console->position = (T3DVec3){{ -1.0f * x_offset, 1.0f * y_offset, 0.0f }};
-						break;
-					case 4:
-						console->position = (T3DVec3){{ -1.0f * x_offset, -1.0f * y_offset, 0.0f }};
-						break;
-				}
-				break;
-			}
-			case 1: {
-				switch (level->consoles_count) {
-					case 2:
-						console->position = (T3DVec3){{ 1.0f * x_offset, 0.0f, 0.0f }};
-						break;
-					case 3:
-						console->position = (T3DVec3){{ 0.0f, -1.0f * y_offset, 0.0f }};
-						break;
-					case 4:
-						console->position = (T3DVec3){{ 1.0f * x_offset, -1.0f * y_offset, 0.0f }};
-						break;
-				}
-				break;
-			}
-			case 2: {
-				switch (level->consoles_count) {
-					case 3:
-						console->position = (T3DVec3){{ 1.0f * x_offset, 1.0f * y_offset, 0.0f }};
-						break;
-					case 4:
-						console->position = (T3DVec3){{ -1.0f * x_offset, 1.0f * y_offset, 0.0f }};
-						break;
-				}
-				break;
-			}
-			case 3: {
-				switch (level->consoles_count) {
-					case 4:
-						console->position = (T3DVec3){{ 1.0f * x_offset, 1.0f * y_offset, 0.0f }};
-						break;
-				}
-				break;
-			}
-		}
+		console->position = console_positions[level->consoles_count-1][i];
 		update_console(console);
 	}
 
@@ -733,7 +697,7 @@ static void play_menu_music() {
 }
 
 void update() {
-	t3d_viewport_set_projection(&viewport, T3D_DEG_TO_RAD(85.0f), 10.0f, 150.0f);
+	t3d_viewport_set_projection(&viewport, T3D_DEG_TO_RAD(45.0f), 10.0f, 150.0f);
 	t3d_viewport_look_at(&viewport, &camPos, &camTarget, &(T3DVec3){{0,1,0}});
 
 	switch (global_state.game_state) {
@@ -996,7 +960,7 @@ static void simulate_particles_smoke(particles_t* particles, int heat_level, flo
     color[3] = ((PhysicalAddr(ptPos) % 8) * 32);
 
     ptPos[2] = posZ + (rand() % 16) - 8;
-    *size = 60 + (rand() % 10);
+    *size = 118 + (rand() % 10);
   }
   particles->currentPart = (particles->currentPart + 1) % particles->particleCount;
 
@@ -1075,7 +1039,7 @@ static void drawsmoke(particles_t* particles, T3DVec3 position, int heat_level) 
 	);
 	tpx_matrix_push(&particles->mat_fp[frameIdx]);
 	
-	float scale = 0.5f * heat_level / consoles_count;
+	float scale = (0.5f + 0.167f * heat_level) * 5 * console_scales[consoles_count-1];
     tpx_state_set_scale(scale, scale);
 
     float tileIdx = fm_floorf(particles->timeTile) * 32;
@@ -1105,6 +1069,21 @@ void draw_bars(float height) {
 	rdpq_fill_rectangle(0, 0, 80, height);
 	rdpq_fill_rectangle(0, 80 - height, 80, 80);
   }
+}
+
+void draw_gauge(int x, int y, int height, int item_width, int spacing, int border, int item_count, int item_max, color_t color) {
+	rdpq_set_mode_standard();
+	rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+	rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
+	rdpq_set_prim_color(RGBA32(0, 0, 0, 0xc0));
+	rdpq_fill_rectangle(x, y, x + 2*border + item_width*item_max + spacing*(item_max-1), y + height);
+	rdpq_set_prim_color(color);
+	for (int i=0; i<item_max; i++) {
+		if (i == item_count) {
+			rdpq_set_prim_color(RGBA32(0x33, 0x33, 0x33, 0xff));
+		}
+		rdpq_fill_rectangle(x + border + item_width*i + spacing*i, y + border, x + border + item_width*(i+1) + spacing*i, y + height - border);
+	}
 }
 
 void render_offscreen() {
@@ -1198,7 +1177,7 @@ void render_3d() {
 				
 				if(console->displayable->bone >= 0) {
   					rdpq_mode_push();
-					float s = 8.0f;
+					float s = 4.0f;
 					t3d_mat4fp_from_srt_euler(
 						&console->displayable->mat_fp2[frameIdx],
 						//console->scale.v,
@@ -1219,7 +1198,8 @@ void render_3d() {
 
 					// Particles
 					if (overheat->overheat_level > 0) {
-						drawsmoke(&console_particles[i], console->position, overheat->overheat_level);
+						T3DVec3 offset = (T3DVec3){{0, 0, -10.0f}};
+						drawsmoke(&console_particles[i], offset, overheat->overheat_level);
 					}
 					rdpq_sync_pipe();
 
@@ -1275,6 +1255,8 @@ void render_2d() {
 			}
 			break;
 		case IN_GAME: {
+			const level_t* level = &levels[global_state.current_level];
+
 			if (paused_wrong_joypads_count) {
 				rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 40, 100, "Please plug a single joypad");
 			} else if (wrong_joypads_count) {
@@ -1284,23 +1266,25 @@ void render_2d() {
 			for (int i=0; i<consoles_count; i++) {
 				console_t* console = &consoles[i];
 				attacker_t* attacker = &console_attackers[i];
+
+				T3DVec3 billboardPos = (T3DVec3){{
+					console->position.v[0] - 140 * console->scale.x,
+					console->position.v[1] + 200 * console->scale.x,
+					console->position.v[2]
+				}};
+				T3DVec3 billboardScreenPos;
+				t3d_viewport_calc_viewspace_pos(&viewport, &billboardScreenPos, &billboardPos);
+				int x = floorf(billboardScreenPos.v[0]);
+				int y = floorf(billboardScreenPos.v[1]);
+				float s = 5 * console_scales[level->consoles_count-1];
+
 				if (attacker->spawned) {
 					// Draw queue
-					T3DVec3 billboardPos = (T3DVec3){{
-						console->position.v[0] - 140 * console->scale.x,
-						console->position.v[1] + 270 * console->scale.x,
-						console->position.v[2]
-					}};
-					T3DVec3 billboardScreenPos;
-					t3d_viewport_calc_viewspace_pos(&viewport, &billboardScreenPos, &billboardPos);
-					int x = floorf(billboardScreenPos.v[0]);
-					int y = floorf(billboardScreenPos.v[1]);
-					const level_t* level = &levels[global_state.current_level];
-					float s = powf(0.7f, (level->consoles_count - 1));
 					for (int j=0; j<attacker->level; j++) {
+						int btn_x = x + (j * 32 * s);
 						queue_button_t btn = get_attacker_button(i, j);
 						if (i == current_joypad && j == 0) {
-							drawprogress(x - (8*s), y - (8*s), s, holding/BUTTON_HOLD_THRESHOLD, RGBA32(255, 0, 0, 255));
+							drawprogress(btn_x - (8*s), y - (8*s), s, holding/BUTTON_HOLD_THRESHOLD, RGBA32(255, 0, 0, 255));
 						}
 						sprite_t* spr = NULL;
 						switch (btn) {
@@ -1321,31 +1305,58 @@ void render_2d() {
 							rdpq_set_mode_standard();
 							rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
 						rdpq_mode_end();
-						rdpq_sprite_blit(spr, x, y, &(rdpq_blitparms_t) {
+						rdpq_sprite_blit(spr, btn_x, y, &(rdpq_blitparms_t) {
 							.scale_x = s, .scale_y = s,
 						});
-						x += 32 / consoles_count;
 					}
 				}
+
+				// Reset and overheat gauges (per console)
+				rdpq_mode_begin();
+					rdpq_set_mode_standard();
+					rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+				rdpq_mode_end();
+				x = i * 80;
+				rdpq_sprite_blit(spr_reset, x + 4, 220, NULL);
+				rdpq_sprite_blit(spr_swirl, x + 40, 220, &(rdpq_blitparms_t) {
+					.width = 32, .height = 32,
+					.scale_x = 0.5f, .scale_y = 0.5f,
+				});
+				draw_gauge(x + 18, 225, 6, 5, 1, 1, level->max_resets_per_console - global_state.level_reset_count_per_console[i], level->max_resets_per_console, RGBA32(0xff, 0xff, 0xff, 0xff));
+				draw_gauge(x + 58, 225, 6, 5, 0, 1, console_overheat[i].overheat_level, 3, RGBA32(0xff, 0xc0 - 0x60 * (console_overheat[i].overheat_level - 1), 0, 0xff));
 			}
 
-			// Print timer
+			// Power-off gauge (shared)
+			// TODO Right-to-left ?
+			draw_gauge(284, 10, 6, 10, 1, 1, level->max_power_cycles - global_state.level_power_cycle_count, level->max_power_cycles, RGBA32(0xff, 0xff, 0xff, 0xff));
+			rdpq_mode_begin();
+				rdpq_set_mode_standard();
+				rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+			rdpq_mode_end();
+			rdpq_sprite_blit(spr_power, 268, 5, NULL);
+
+			// Timer
 			rdpq_sync_pipe();
 			rdpq_textparms_t textparms = { .align = ALIGN_CENTER, .width = 320, };
         	rdpq_text_printf(&textparms, FONT_HALODEK, 0, 30, "%d", (int) ceilf(global_state.level_timer));
 			break;
 		}
-		case LEVEL_CLEARED:
-			rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 40, 100, "Congrats !!");
+		case LEVEL_CLEARED: {
+			rdpq_textparms_t textparms = { .align = ALIGN_CENTER, .width = 320, };
+        	rdpq_text_printf(&textparms, FONT_HALODEK, 0, 100, "LEVEL %d CLEARED!", global_state.current_level+1);
 			break;
-		case FINISHED:
-			rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 40, 100, "FINISHED !!");
+		}
+		case FINISHED: {
+			rdpq_textparms_t textparms = { .align = ALIGN_CENTER, .width = 320, };
+        	rdpq_text_printf(&textparms, FONT_HALODEK, 0, 100, "CONGRATULATIONS!");
 			break;
-		case GAME_OVER:
+		}
+		case GAME_OVER: {
 			rdpq_textparms_t textparms = { .align = ALIGN_CENTER, .width = 320, };
         	rdpq_text_printf(&textparms, FONT_HALODEK, 0, 80, "GAME");
         	rdpq_text_printf(&textparms, FONT_HALODEK, 0, 120, "OVER");
 			break;
+		}
 	}
 }
 
@@ -1407,6 +1418,8 @@ int main(void) {
     spr_c_down = sprite_load("rom:/CDown.sprite");
     spr_progress = sprite_load("rom:/CircleProgress.i8.sprite");
     spr_circlemask = sprite_load("rom:/CircleMask.i8.sprite");
+    spr_reset = sprite_load("rom:/reset.sprite");
+    spr_power = sprite_load("rom:/power.sprite");
 
 	spr_swirl = sprite_load("rom://swirl.i4.sprite");
 
@@ -1448,6 +1461,9 @@ int main(void) {
 
 	debugf_uart("Joypad poll OK\n");
 
+	useExpansionPak = is_memory_expanded();
+	debugf_uart("Expansion Pak: %d\n", useExpansionPak);
+
 	global_state_t restored_global_state;
 	console_t restored_consoles[MAX_CONSOLES];
 	attacker_t restored_attackers[MAX_CONSOLES];
@@ -1455,6 +1471,7 @@ int main(void) {
 
 	if (!forceColdBoot) {
 		// Restore game data from heap replicas
+		// TODO Make use of expansion pak if available (beginning of expansion pak has best retention time)
 		restored_global_state_count = restore(&heap1, &restored_global_state, GLOBAL_STATE_PAYLOAD_SIZE, sizeof(global_state_t), 1, GLOBAL_STATE_MAGIC, GLOBAL_STATE_MASK);
 		restored_consoles_count = restore(&heap1, restored_consoles, CONSOLE_PAYLOAD_SIZE, sizeof(console_t), MAX_CONSOLES, CONSOLE_MAGIC, CONSOLE_MASK);
 		restored_attackers_count = restore(&heap2, restored_attackers, ATTACKER_PAYLOAD_SIZE, sizeof(attacker_t), MAX_CONSOLES, ATTACKER_MAGIC, ATTACKER_MASK);
@@ -1489,6 +1506,7 @@ int main(void) {
 			}
 		}
 
+		// TODO Game Over if broken level ??
 		if (!broken_level) {
 			replicate_global_state();
 
