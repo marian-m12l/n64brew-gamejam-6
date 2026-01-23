@@ -12,6 +12,9 @@
 
 #include "pc64.h"
 
+// FIXME debug heaps
+static char __attribute__((aligned(16))) heaps_buf[40];
+
 void debugf_uart(char* format, ...) {
 	va_list args;
 	va_start(args, format);
@@ -74,7 +77,7 @@ static rdpq_font_t *font_halo_dek;
 typedef enum {
 	INTRO = 0,
 	IN_GAME,
-	LEVEL_CLEARED,
+	NEXT_LEVEL,
 	FINISHED,
 	GAME_OVER
 } game_state_t;
@@ -89,20 +92,21 @@ typedef struct {
 	uint8_t max_resets_per_console;
 	uint8_t max_power_cycles;
 	uint8_t duration;
+	char* description;
 } level_t;
 
 const level_t levels[TOTAL_LEVELS] = {
-	{ 1, 9900, 1.0f, 8.0f, 2, 2, 20 },
-	{ 2, 9900, 1.0f, 8.0f, 2, 1, 30 },
-	{ 3, 9800, 0.8f, 6.0f, 1, 1, 45 },
-	{ 4, 9800, 0.8f, 6.0f, 1, 1, 60 }
+	{ 1, 9900, 1.0f, 8.0f, 2, 2, 20, "TODO Rules ?" },
+	{ 2, 9900, 1.0f, 8.0f, 2, 1, 30, "In this level, you will have to plug your controller into the slot of each console in order to operate on it. You are allowed to reset each console twice to mitigate overheat. You can also power your console off once, but remember: don't let the memory decay to the point where you'll lose your consoles..." },
+	{ 3, 9800, 0.8f, 6.0f, 1, 1, 45, "Level 3" },
+	{ 4, 9800, 0.8f, 6.0f, 1, 1, 60, "Final Level" }
 };
 
 #define CONSOLE_MAGIC (0x11223300)
 #define CONSOLE_MASK (0xffffff00)
 
 #define MAX_CONSOLES (4)
-#define CONSOLE_REPLICAS (40)
+#define CONSOLE_REPLICAS (100)
 
 typedef struct {
     // CRT model
@@ -174,6 +178,7 @@ typedef struct {
 	// TODO Vary strength (requires longer buttons presses? attacks faster? ...)
 	// Exclude remaining fields from replication
 	char __exclude;
+	int replicas_count;
 	void* replicas[ATTACKER_REPLICAS];
 } attacker_t;
 
@@ -191,6 +196,7 @@ typedef struct {
 	float last_overheat;
 	// Exclude remaining fields from replication
 	char __exclude;
+	int replicas_count;
 	void* replicas[OVERHEAT_REPLICAS];
 } overheat_t;
 
@@ -237,7 +243,7 @@ volatile uint32_t reset_ticks __attribute__((section(".persistent")));
 
 #define GLOBAL_STATE_MAGIC (0xaabbccdd)
 #define GLOBAL_STATE_MASK (0xffffffff)
-#define GLOBAL_STATE_REPLICAS (40)
+#define GLOBAL_STATE_REPLICAS (100)
 
 typedef struct {
 	game_state_t game_state;
@@ -306,7 +312,7 @@ void dump_game_state() {
 
 void replicate_global_state() {
 	debugf_uart("replicate global state\n");
-	replicate(&heap1, GLOBAL_STATE_MAGIC, &global_state, GLOBAL_STATE_PAYLOAD_SIZE, GLOBAL_STATE_REPLICAS, true, true, global_state.replicas);
+	replicate(HIGHEST, GLOBAL_STATE_MAGIC, &global_state, GLOBAL_STATE_PAYLOAD_SIZE, GLOBAL_STATE_REPLICAS, true, true, global_state.replicas);
 	debugf_uart("replicas: %p - %p\n", global_state.replicas[0], global_state.replicas[GLOBAL_STATE_REPLICAS-1]);
 	//dump_game_state();
 }
@@ -334,6 +340,19 @@ void reset_level_global_state(int next_level) {
 	memset(&global_state.level_reset_count_per_console, 0, sizeof(global_state.level_reset_count_per_console));
 	global_state.level_power_cycle_count = 0;
 	global_state.level_timer = levels[next_level].duration;
+	update_global_state();
+}
+
+void reset_global_state () {
+	global_state.game_state = INTRO;
+	global_state.current_level = 0;
+	global_state.reset_count = 0;
+	global_state.power_cycle_count = 0;
+	memset(&global_state.level_reset_count_per_console, 0, sizeof(global_state.level_reset_count_per_console));
+	global_state.level_power_cycle_count = 0;
+	global_state.level_timer = 0;
+	global_state.wrong_joypads_count_displayed = false;
+	update_global_state();
 }
 
 void set_game_state(game_state_t state) {
@@ -374,7 +393,7 @@ void set_wrong_joypads_count_displayed(bool b) {
 
 void replicate_console(console_t* console) {
 	debugf_uart("replicate console #%d\n", console->id);
-	replicate(&heap1, CONSOLE_MAGIC | console->id, console, CONSOLE_PAYLOAD_SIZE, CONSOLE_REPLICAS, true, true, console->replicas);
+	replicate(HIGHEST, CONSOLE_MAGIC | console->id, console, CONSOLE_PAYLOAD_SIZE, CONSOLE_REPLICAS, true, true, console->replicas);
 	debugf_uart("replicas: %p - %p\n", console->replicas[0], console->replicas[CONSOLE_REPLICAS-1]);
 	//dump_game_state();
 }
@@ -454,15 +473,15 @@ void setup_console(int i, console_t* console) {
 
 
 void replicate_attacker(attacker_t* attacker) {
-	debugf_uart("replicate attacker #%d\n", attacker->id);
-	replicate(&heap2, ATTACKER_MAGIC | attacker->id, attacker, ATTACKER_PAYLOAD_SIZE, ATTACKER_REPLICAS, true, true, attacker->replicas);
-	debugf_uart("replicas: %p - %p\n", attacker->replicas[0], attacker->replicas[ATTACKER_REPLICAS-1]);
+	debugf_uart("replicate attacker #%d count=%d\n", attacker->id, attacker->replicas_count);
+	replicate(LOW, ATTACKER_MAGIC | attacker->id, attacker, ATTACKER_PAYLOAD_SIZE, attacker->replicas_count, true, true, attacker->replicas);
+	debugf_uart("replicas: %p - %p\n", attacker->replicas[0], attacker->replicas[attacker->replicas_count-1]);
 	//dump_game_state();
 }
 
 void update_attacker(attacker_t* attacker) {
 	//debugf_uart("updating attacker replicas: %p %p %p %p\n", attacker->replicas[0], attacker->replicas[1], attacker->replicas[2], attacker->replicas[3]);
-	update_replicas(attacker->replicas, attacker, ATTACKER_PAYLOAD_SIZE, ATTACKER_REPLICAS, true);
+	update_replicas(attacker->replicas, attacker, ATTACKER_PAYLOAD_SIZE, attacker->replicas_count, true);
 	//dump_game_state();
 }
 
@@ -480,10 +499,11 @@ void shrink_attacker(int idx) {
 		if (attacker->level == 0) {
 			attacker->spawned = false;
 			debugf_uart("shrink %d: despawn\n", idx);
+			// TODO Simplify this mess --> always replicate all attackers when starting a new level?
+			erase_and_free_replicas(attacker->replicas, attacker->replicas_count);
+		} else {
+			update_attacker(attacker);
 		}
-		update_attacker(attacker);
-		// TODO Simplify this mess --> always replicate all attackers when starting a new level?
-		erase_and_free_replicas(&heap2, attacker->replicas, ATTACKER_REPLICAS);
 	}
 }
 
@@ -509,19 +529,10 @@ void spawn_attacker(int idx) {
 	attacker->last_attack = 0.0f;
 	attacker->queue.start = 0;
 	attacker->queue.end = 0;
+	attacker->replicas_count = 1 + (rand() % (ATTACKER_REPLICAS-1));
 	debugf_uart("spawn %d: level=%d start=%d end=%d\n", idx, attacker->level, attacker->queue.start, attacker->queue.end);
 	replicate_attacker(attacker);
 	grow_attacker(idx);
-}
-
-void reset_attacker(int idx) {
-	attacker_t* attacker = &console_attackers[idx];
-	attacker->spawned = false;
-	attacker->level = 0;
-	attacker->last_attack = 0.0f;
-	attacker->queue.start = 0;
-	attacker->queue.end = 0;
-	debugf_uart("reset %d: level=%d start=%d end=%d\n", idx, attacker->level, attacker->queue.start, attacker->queue.end);
 }
 
 queue_button_t get_attacker_button(int idx, int i) {
@@ -537,15 +548,15 @@ queue_button_t get_attacker_button(int idx, int i) {
 
 
 void replicate_overheat(overheat_t* overheat) {
-	debugf_uart("replicate overheat #%d\n", overheat->id);
-	replicate(&heap2, OVERHEAT_MAGIC | overheat->id, overheat, OVERHEAT_PAYLOAD_SIZE, OVERHEAT_REPLICAS, true, true, overheat->replicas);
-	debugf_uart("replicas: %p - %p\n", overheat->replicas[0], overheat->replicas[OVERHEAT_REPLICAS-1]);
+	debugf_uart("replicate overheat #%d count=%d\n", overheat->id, overheat->replicas_count);
+	replicate(LOWEST, OVERHEAT_MAGIC | overheat->id, overheat, OVERHEAT_PAYLOAD_SIZE, overheat->replicas_count, true, true, overheat->replicas);
+	debugf_uart("replicas: %p - %p\n", overheat->replicas[0], overheat->replicas[overheat->replicas_count-1]);
 	//dump_game_state();
 }
 
 void update_overheat(overheat_t* overheat) {
 	//debugf_uart("updating overheat replicas: %p %p %p %p\n", overheat->replicas[0], overheat->replicas[1], overheat->replicas[2], overheat->replicas[3]);
-	update_replicas(overheat->replicas, overheat, OVERHEAT_PAYLOAD_SIZE, OVERHEAT_REPLICAS, true);
+	update_replicas(overheat->replicas, overheat, OVERHEAT_PAYLOAD_SIZE, overheat->replicas_count, true);
 	//dump_game_state();
 }
 
@@ -558,6 +569,7 @@ void increase_overheat(int idx) {
 		debugf_uart("increase heat %d: level=%d\n", idx, overheat->overheat_level);
 		// Replicate on first spawn, update otherwise
 		if (overheat->replicas[0] == NULL) {
+			overheat->replicas_count = 1 + (rand() % (OVERHEAT_REPLICAS-1));
 			replicate_overheat(overheat);
 		} else {
 			update_overheat(overheat);
@@ -573,6 +585,7 @@ void decrease_overheat(int idx) {
 		debugf_uart("decrease heat %d: level=%d\n", idx, overheat->overheat_level);
 		// Replicate on first spawn, update otherwise
 		if (overheat->replicas[0] == NULL) {
+			overheat->replicas_count = 1 + (rand() % (OVERHEAT_REPLICAS-1));
 			replicate_overheat(overheat);
 		} else {
 			update_overheat(overheat);
@@ -632,7 +645,6 @@ void load_level(int next_level) {
 		update_console(console);
 	}
 
-	reset_level_global_state(next_level);
 	gtime = 0;
 }
 
@@ -643,7 +655,7 @@ void clear_level() {
 	int count = consoles_count;
 	for (int i=0; i<count; i++) {
 		console_t* console = &consoles[i];
-		erase_and_free_replicas(&heap1, console->replicas, CONSOLE_REPLICAS);
+		erase_and_free_replicas(console->replicas, CONSOLE_REPLICAS);
 		displayable_t* displayable = console->displayable;
 		free_uncached(displayable->mat_fp);
 		t3d_skeleton_destroy(&displayable->skel);
@@ -660,13 +672,11 @@ void clear_level() {
 		memset(particles, 0, sizeof(particles_t));
 
 		attacker_t* attacker = &console_attackers[i];
-		reset_attacker(i);
-		erase_and_free_replicas(&heap2, attacker->replicas, ATTACKER_REPLICAS);
+		erase_and_free_replicas(attacker->replicas, attacker->replicas_count);
 		memset(attacker, 0, sizeof(attacker_t));
 
 		overheat_t* overheat = &console_overheat[i];
-		reset_overheat(i);
-		erase_and_free_replicas(&heap2, overheat->replicas, OVERHEAT_REPLICAS);
+		erase_and_free_replicas(overheat->replicas, overheat->replicas_count);
 		memset(overheat, 0, sizeof(overheat_t));
 
 		consoles_count--;
@@ -706,10 +716,10 @@ void update() {
 			if (current_joypad == 0) {
 				joypad_buttons_t pressed = joypad_get_buttons_pressed(current_joypad);
 				if (pressed.a || pressed.start) {
-					// Load level 1
-					load_level(0);
-					play_ingame_music();
-					set_game_state(IN_GAME);
+					set_game_state(NEXT_LEVEL);
+					reset_level_global_state(global_state.current_level);
+					//play_menu_music();
+					wav64_play(&sfx_blip, SFX_CHANNEL);
 				}
 			}
 			break;
@@ -823,20 +833,21 @@ void update() {
 
 			// Handle end condition and change level
 			if (cleared) {
-				set_game_state(LEVEL_CLEARED);
+				set_game_state(NEXT_LEVEL);
 				// TODO Keep level displayed for a few seconds, clear when loading the next level
 				clear_level();
+				reset_level_global_state(global_state.current_level + 1);
 				play_menu_music();
 				wav64_play(&sfx_blip, SFX_CHANNEL);
 			}
 			break;
 		}
-		case LEVEL_CLEARED: {
+		case NEXT_LEVEL: {
 			if (current_joypad != -1) {
 				joypad_buttons_t pressed = joypad_get_buttons_pressed(current_joypad);
 				if (pressed.a || pressed.start) {
 					// Load next level
-					int next_level = global_state.current_level + 1;
+					int next_level = global_state.current_level;
 					if (next_level < TOTAL_LEVELS) {
 						load_level(next_level);
 						play_ingame_music();
@@ -853,8 +864,7 @@ void update() {
 			if (current_joypad != -1) {
 				joypad_buttons_t pressed = joypad_get_buttons_pressed(current_joypad);
 				if (pressed.start) {
-					// TODO Reinitialize game data
-					set_game_state(INTRO);
+					reset_global_state();
 					wav64_play(&sfx_blip, SFX_CHANNEL);
 				}
 			}
@@ -864,8 +874,7 @@ void update() {
 			if (current_joypad != -1) {
 				joypad_buttons_t pressed = joypad_get_buttons_pressed(current_joypad);
 				if (pressed.start) {
-					// TODO Reinitialize game data
-					set_game_state(INTRO);
+					reset_global_state();
 					wav64_play(&sfx_blip, SFX_CHANNEL);
 				}
 			}
@@ -1210,7 +1219,7 @@ void render_3d() {
 			}
 			break;
 		}
-		case LEVEL_CLEARED:
+		case NEXT_LEVEL:
 			break;
 		case FINISHED:
 			break;
@@ -1229,22 +1238,20 @@ void render_2d() {
 	if (heap_size > 4*1024*1024) {
 		heap_size -= 4*1024*1024;
 	}
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 160, "Reset console : %d", reset_console);
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 170, "    Boot type : %s", rst == RESET_COLD ? "COLD" : "WARM");
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 180, "     Restored : %d/%d/%d/%d", restored_global_state_count, restored_consoles_count, restored_attackers_count, restored_overheat_count);
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 190, "       Resets : %ld/%d-%d-%d-%d", global_state.reset_count, global_state.level_reset_count_per_console[0], global_state.level_reset_count_per_console[1], global_state.level_reset_count_per_console[2], global_state.level_reset_count_per_console[3]);
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 200, " Power cycles : %ld/%d", global_state.power_cycle_count, global_state.level_power_cycle_count);
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 210, "    Heap size : %d", heap_size);
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 220, "    Allocated : %d", stats.used);
+	heaps_stats(heaps_buf, 40);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 150, "Reset console : %d", reset_console);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 160, "    Boot type : %s", rst == RESET_COLD ? "COLD" : "WARM");
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 170, "     Restored : %d/%d/%d/%d", restored_global_state_count, restored_consoles_count, restored_attackers_count, restored_overheat_count);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 180, "       Resets : %ld/%d-%d-%d-%d", global_state.reset_count, global_state.level_reset_count_per_console[0], global_state.level_reset_count_per_console[1], global_state.level_reset_count_per_console[2], global_state.level_reset_count_per_console[3]);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 190, " Power cycles : %ld/%d", global_state.power_cycle_count, global_state.level_power_cycle_count);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 200, "         Heap : %d/%d", stats.used, heap_size);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 210, "  Heaps stats : %s", heaps_buf);
 
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 150, "State     : %d", global_state.game_state);
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 160, "Level     : %d", global_state.current_level);
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 170, "Port      : %d", current_joypad);
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 180, "Joypads   : %d/%d/%d/%d", joypad_is_connected(JOYPAD_PORT_1), joypad_is_connected(JOYPAD_PORT_2), joypad_is_connected(JOYPAD_PORT_3), joypad_is_connected(JOYPAD_PORT_4));
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 190, "Consoles  : %ld", consoles_count);
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 200, "Reset ticks: %d", reset_ticks);
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 210, "Reset held: %ldms", held_ms);
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 220, "FPS   : %.2f", display_get_fps());
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 160, "State     : %d", global_state.game_state);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 170, "Level     : %d", global_state.current_level);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 180, "Port      : %d", current_joypad);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 190, "Reset held: %ldms", held_ms);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 200, "FPS   : %.2f", display_get_fps());
 #endif
 
 	switch (global_state.game_state) {
@@ -1341,9 +1348,15 @@ void render_2d() {
         	rdpq_text_printf(&textparms, FONT_HALODEK, 0, 30, "%d", (int) ceilf(global_state.level_timer));
 			break;
 		}
-		case LEVEL_CLEARED: {
+		case NEXT_LEVEL: {
 			rdpq_textparms_t textparms = { .align = ALIGN_CENTER, .width = 320, };
-        	rdpq_text_printf(&textparms, FONT_HALODEK, 0, 100, "LEVEL %d CLEARED!", global_state.current_level+1);
+			if (global_state.current_level > 0) {
+        		rdpq_text_printf(&textparms, FONT_HALODEK, 0, 100, "LEVEL %d CLEARED!", global_state.current_level);
+			}
+			if (global_state.current_level < TOTAL_LEVELS) {
+				rdpq_textparms_t descparms = { .align = ALIGN_LEFT, .width = 300, .height = 50, .wrap = WRAP_WORD };
+				rdpq_text_printf(&descparms, FONT_BUILTIN_DEBUG_MONO, 10, 10, levels[global_state.current_level].description);
+			}
 			break;
 		}
 		case FINISHED: {
@@ -1421,11 +1434,10 @@ int main(void) {
 
 	if (!forceColdBoot) {
 		// Restore game data from heap replicas
-		// TODO Make use of expansion pak if available (beginning of expansion pak has best retention time)
-		restored_global_state_count = restore(&heap1, &restored_global_state, GLOBAL_STATE_PAYLOAD_SIZE, sizeof(global_state_t), 1, GLOBAL_STATE_MAGIC, GLOBAL_STATE_MASK);
-		restored_consoles_count = restore(&heap1, restored_consoles, CONSOLE_PAYLOAD_SIZE, sizeof(console_t), MAX_CONSOLES, CONSOLE_MAGIC, CONSOLE_MASK);
-		restored_attackers_count = restore(&heap2, restored_attackers, ATTACKER_PAYLOAD_SIZE, sizeof(attacker_t), MAX_CONSOLES, ATTACKER_MAGIC, ATTACKER_MASK);
-		restored_overheat_count = restore(&heap2, restored_overheat, OVERHEAT_PAYLOAD_SIZE, sizeof(overheat_t), MAX_CONSOLES, OVERHEAT_MAGIC, OVERHEAT_MASK);
+		restored_global_state_count = restore(&restored_global_state, GLOBAL_STATE_PAYLOAD_SIZE, sizeof(global_state_t), 1, GLOBAL_STATE_MAGIC, GLOBAL_STATE_MASK);
+		restored_consoles_count = restore(restored_consoles, CONSOLE_PAYLOAD_SIZE, sizeof(console_t), MAX_CONSOLES, CONSOLE_MAGIC, CONSOLE_MASK);
+		restored_attackers_count = restore(restored_attackers, ATTACKER_PAYLOAD_SIZE, sizeof(attacker_t), MAX_CONSOLES, ATTACKER_MAGIC, ATTACKER_MASK);
+		restored_overheat_count = restore(restored_overheat, OVERHEAT_PAYLOAD_SIZE, sizeof(overheat_t), MAX_CONSOLES, OVERHEAT_MAGIC, OVERHEAT_MASK);
 	} else {
 		// TODO Clean all variables (held_ms, ...)
 	}
@@ -1437,6 +1449,7 @@ int main(void) {
 	clear_heaps();
 	debugf_uart("Heaps cleared\n");
 
+	bool restored_something = (restored_global_state_count + restored_consoles_count + restored_attackers_count + restored_overheat_count) > 0;
 	bool restored_ok = false;
 	if (restored_global_state_count == 1) {
 		debugf_uart("Entering followup boot sequence\n");
@@ -1451,7 +1464,7 @@ int main(void) {
 			if (restored_consoles_count != level->consoles_count) {
 				debugf_uart("FAILED TO RESTORE ALL CONSOLES !!! %d != %d\n", restored_consoles_count, level->consoles_count);
 				// TODO Should show game over ?
-				debugf_uart("BROKEN: fallback to initial boot sequence\n");
+				//debugf_uart("BROKEN: fallback to initial boot sequence\n");
 				broken_level = true;
 			}
 		}
@@ -1460,7 +1473,7 @@ int main(void) {
 		restored_ok = !broken_level;
 	}
 
-	if (!restored_ok) {
+	if (!restored_something) {
 		debugf_uart("Entering initial boot sequence\n");
 #ifndef DEBUG_MODE
 		n64brew_logo();
@@ -1526,100 +1539,109 @@ int main(void) {
 	debugf_uart("TPX init OK\n");
 
 	
-	if (restored_ok) {
-		replicate_global_state();
+	if (restored_something) {
+		if (restored_ok) {
+			replicate_global_state();
 
-		debugf_uart("game_state: %d\n", global_state.game_state);
-		debugf_uart("reset_console: %d\n", reset_console);
+			debugf_uart("game_state: %d\n", global_state.game_state);
+			debugf_uart("reset_console: %d\n", reset_console);
 
-		if (global_state.game_state == IN_GAME) {
-			// Restored at least once console: keep playing
-			consoles_count = restored_consoles_count;
-			for (int i=0; i<restored_consoles_count; i++) {
-				uint32_t id = restored_consoles[i].id;
-				console_t* console = &consoles[id];
-				*console = restored_consoles[i];
-				debugf_uart("restored: %d\n", console->id);
-				console->displayable = &console_displayables[i];
-				// Recreate replicas (alternative would be to keep replicas as-is)
-				replicate_console(console);
-			}
-			debugf_uart("Consoles restored\n");
-
-			for (int i=0; i<restored_attackers_count; i++) {
-				uint32_t id = restored_attackers[i].id;
-				attacker_t* attacker = &console_attackers[id];
-				*attacker = restored_attackers[i];
-				debugf_uart("restored attacker: %d\n", attacker->id);
-				if (attacker->spawned) {
-					replicate_attacker(attacker);
-				} else {
-					debugf_uart("restored unspawned attacker --> not replicating\n");
+			if (global_state.game_state == IN_GAME) {
+				// Restored at least once console: keep playing
+				consoles_count = restored_consoles_count;
+				for (int i=0; i<restored_consoles_count; i++) {
+					uint32_t id = restored_consoles[i].id;
+					console_t* console = &consoles[id];
+					*console = restored_consoles[i];
+					debugf_uart("restored: %d\n", console->id);
+					console->displayable = &console_displayables[i];
+					// Recreate replicas (alternative would be to keep replicas as-is)
+					replicate_console(console);
 				}
+				debugf_uart("Consoles restored\n");
+
+				for (int i=0; i<restored_attackers_count; i++) {
+					uint32_t id = restored_attackers[i].id;
+					attacker_t* attacker = &console_attackers[id];
+					*attacker = restored_attackers[i];
+					debugf_uart("restored attacker: %d\n", attacker->id);
+					if (attacker->spawned) {
+						replicate_attacker(attacker);
+					} else {
+						debugf_uart("restored unspawned attacker --> not replicating\n");
+					}
+				}
+
+				for (int i=0; i<restored_overheat_count; i++) {
+					uint32_t id = restored_overheat[i].id;
+					overheat_t* overheat = &console_overheat[id];
+					*overheat = restored_overheat[i];
+					debugf_uart("restored overheat: %d\n", overheat->id);
+					replicate_overheat(overheat);
+					
+					// Decrease overheat level of console depending on held_ms
+					if (rst == RESET_WARM && overheat->id == reset_console && overheat->overheat_level > 0) {
+						debugf_uart("DECREASE overheat of RESET CONSOLE: %d\n", overheat->id);
+						decrease_overheat(id);
+						if (held_ms >= 5000) {
+							debugf_uart("DECREASE AGAIN overheat of RESET CONSOLE: %d held=%d\n", overheat->id, held_ms);
+							decrease_overheat(id);
+						}
+					}
+				}
+
+				// Load model for each console
+				for (int i=0; i<consoles_count; i++) {
+					setup_console(i, &consoles[i]);
+				}
+				
+				debugf_uart("Consoles setup OK\n");
 			}
 
-			for (int i=0; i<restored_overheat_count; i++) {
-				uint32_t id = restored_overheat[i].id;
-				overheat_t* overheat = &console_overheat[id];
-				*overheat = restored_overheat[i];
-				debugf_uart("restored overheat: %d\n", overheat->id);
-				replicate_overheat(overheat);
-				
-				// Decrease overheat level of console depending on held_ms
-				if (rst == RESET_WARM && overheat->id == reset_console && overheat->overheat_level > 0) {
-					debugf_uart("DECREASE overheat of RESET CONSOLE: %d\n", overheat->id);
-					decrease_overheat(id);
-					if (held_ms >= 5000) {
-						debugf_uart("DECREASE AGAIN overheat of RESET CONSOLE: %d held=%d\n", overheat->id, held_ms);
-						decrease_overheat(id);
+			if (rst == RESET_COLD) {
+				debugf_uart("Cold\n");
+				inc_power_cycle_count();
+				if (global_state.game_state == IN_GAME) {
+					inc_level_power_cycle_count();
+					// TODO Handle too many power cycles in level --> game over
+					if (global_state.level_power_cycle_count > levels[global_state.current_level].max_power_cycles) {
+						debugf_uart("Too many power cycles in level %d: %d > %d\n", global_state.current_level, global_state.level_power_cycle_count, levels[global_state.current_level].max_power_cycles);
+						// TODO Game Over --> display reason?
+						clear_level();
+						wav64_play(&sfx_gameover, SFX_CHANNEL);
+						play_menu_music();
+						set_game_state(GAME_OVER);
+					}
+				}
+			} else {
+				debugf_uart("Warm\n");
+				inc_reset_count();
+				if (global_state.game_state == IN_GAME) {
+					inc_level_reset_count_per_console(reset_console);
+					// TODO Handle too many resets in level --> game over? penalty?
+					// TODO Handle too many power cycles in level --> game over
+					if (global_state.level_reset_count_per_console[reset_console] > levels[global_state.current_level].max_resets_per_console) {
+						debugf_uart("Too many resets for console %d in level %d: %d > %d\n", reset_console, global_state.current_level, global_state.level_reset_count_per_console[reset_console], levels[global_state.current_level].max_resets_per_console);
+						// TODO Game Over --> display reason?
+						clear_level();
+						wav64_play(&sfx_gameover, SFX_CHANNEL);
+						play_menu_music();
+						set_game_state(GAME_OVER);
 					}
 				}
 			}
 
-			// Load model for each console
-			for (int i=0; i<consoles_count; i++) {
-				setup_console(i, &consoles[i]);
-			}
-			
-			debugf_uart("Consoles setup OK\n");
-		}
+			reset_console = -1;
 
-		if (rst == RESET_COLD) {
-			debugf_uart("Cold\n");
-			inc_power_cycle_count();
-			if (global_state.game_state == IN_GAME) {
-				inc_level_power_cycle_count();
-				// TODO Handle too many power cycles in level --> game over
-				if (global_state.level_power_cycle_count > levels[global_state.current_level].max_power_cycles) {
-					debugf_uart("Too many power cycles in level %d: %d > %d\n", global_state.current_level, global_state.level_power_cycle_count, levels[global_state.current_level].max_power_cycles);
-					// TODO Game Over --> display reason?
-					clear_level();
-					wav64_play(&sfx_gameover, SFX_CHANNEL);
-					play_menu_music();
-					set_game_state(GAME_OVER);
-				}
-			}
+			debugf_uart("Followup boot sequence OK\n");
 		} else {
-			debugf_uart("Warm\n");
-			inc_reset_count();
-			if (global_state.game_state == IN_GAME) {
-				inc_level_reset_count_per_console(reset_console);
-				// TODO Handle too many resets in level --> game over? penalty?
-				// TODO Handle too many power cycles in level --> game over
-				if (global_state.level_reset_count_per_console[reset_console] > levels[global_state.current_level].max_resets_per_console) {
-					debugf_uart("Too many resets for console %d in level %d: %d > %d\n", reset_console, global_state.current_level, global_state.level_reset_count_per_console[reset_console], levels[global_state.current_level].max_resets_per_console);
-					// TODO Game Over --> display reason?
-					clear_level();
-					wav64_play(&sfx_gameover, SFX_CHANNEL);
-					play_menu_music();
-					set_game_state(GAME_OVER);
-				}
-			}
+			debugf_uart("partial restoration: game over\n");
+			// TODO Game Over --> display reason?
+			clear_level();
+			wav64_play(&sfx_gameover, SFX_CHANNEL);
+			play_menu_music();
+			set_game_state(GAME_OVER);
 		}
-
-		reset_console = -1;
-
-		debugf_uart("Followup boot sequence OK\n");
 	}
 
 	dump_game_state();
