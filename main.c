@@ -15,7 +15,7 @@
 // FIXME debug heaps
 static char __attribute__((aligned(16))) heaps_buf[40];
 
-void debugf_uart(char* format, ...) {
+static void debugf_uart(char* format, ...) {
 	va_list args;
 	va_start(args, format);
 	vsnprintf(write_buf, sizeof(write_buf), format, args);
@@ -88,7 +88,7 @@ typedef struct {
 	uint8_t consoles_count;
 	uint16_t attack_rate;
 	float attack_grace_pediod;
-	float overheat_pediod;
+	float overheat_pediod;	// FIXME No need to change this per level
 	uint8_t max_resets_per_console;
 	uint8_t max_power_cycles;
 	uint8_t duration;
@@ -98,15 +98,15 @@ typedef struct {
 const level_t levels[TOTAL_LEVELS] = {
 	{ 1, 9900, 1.0f, 8.0f, 2, 2, 20, "TODO Rules ?" },
 	{ 2, 9900, 1.0f, 8.0f, 2, 1, 30, "In this level, you will have to plug your controller into the slot of each console in order to operate on it. You are allowed to reset each console twice to mitigate overheat. You can also power your console off once, but remember: don't let the memory decay to the point where you'll lose your consoles..." },
-	{ 3, 9800, 0.8f, 6.0f, 1, 1, 45, "Level 3" },
-	{ 4, 9800, 0.8f, 6.0f, 1, 1, 60, "Final Level" }
+	{ 3, 9800, 0.8f, 8.0f, 1, 1, 45, "Level 3" },
+	{ 4, 9800, 0.8f, 8.0f, 1, 1, 60, "Final Level" }
 };
 
 #define CONSOLE_MAGIC (0x11223300)
 #define CONSOLE_MASK (0xffffff00)
 
 #define MAX_CONSOLES (4)
-#define CONSOLE_REPLICAS (100)
+#define CONSOLE_REPLICAS (200)
 
 typedef struct {
     // CRT model
@@ -142,7 +142,7 @@ typedef struct {
 
 #define ATTACKER_MAGIC (0x44556600)
 #define ATTACKER_MASK (0xffffff00)
-#define ATTACKER_REPLICAS (10)
+#define ATTACKER_REPLICAS (10)	// FIXME Need more replicas for finer control on threshold
 
 typedef enum {
 	SATURN = 0,
@@ -175,10 +175,10 @@ typedef struct {
 	attack_queue_t queue;
 	uint8_t level;
 	float last_attack;
+	int min_replicas;
 	// TODO Vary strength (requires longer buttons presses? attacks faster? ...)
 	// Exclude remaining fields from replication
 	char __exclude;
-	int replicas_count;
 	void* replicas[ATTACKER_REPLICAS];
 } attacker_t;
 
@@ -188,15 +188,15 @@ typedef struct {
 
 #define OVERHEAT_MAGIC (0x77889900)
 #define OVERHEAT_MASK (0xffffff00)
-#define OVERHEAT_REPLICAS (10)
+#define OVERHEAT_REPLICAS (10)	// FIXME Need more replicas for finer control on threshold
 
 typedef struct {
 	uint32_t id;
 	int overheat_level;
 	float last_overheat;
+	int min_replicas;
 	// Exclude remaining fields from replication
 	char __exclude;
-	int replicas_count;
 	void* replicas[OVERHEAT_REPLICAS];
 } overheat_t;
 
@@ -235,17 +235,20 @@ int restored_global_state_count;
 int restored_consoles_count;
 int restored_attackers_count;
 int restored_overheat_count;
+int restored_attackers_ignored;
+int restored_overheat_ignored;
 
 
 volatile int reset_console __attribute__((section(".persistent")));
 volatile uint32_t reset_ticks __attribute__((section(".persistent")));
 
 
-#define GLOBAL_STATE_MAGIC (0xaabbccdd)
-#define GLOBAL_STATE_MASK (0xffffffff)
-#define GLOBAL_STATE_REPLICAS (100)
+#define GLOBAL_STATE_MAGIC (0xaabbcc00)
+#define GLOBAL_STATE_MASK (0xffffff00)
+#define GLOBAL_STATE_REPLICAS (200)
 
 typedef struct {
+	uint32_t id;
 	game_state_t game_state;
 	uint8_t current_level;
 	uint32_t reset_count;
@@ -324,6 +327,7 @@ void update_global_state() {
 }
 
 void init_global_state() {
+	global_state.id = 0;
 	global_state.game_state = INTRO;
 	global_state.current_level = 0;
 	global_state.reset_count = 0;
@@ -344,6 +348,7 @@ void reset_level_global_state(int next_level) {
 }
 
 void reset_global_state () {
+	global_state.id = 0;
 	global_state.game_state = INTRO;
 	global_state.current_level = 0;
 	global_state.reset_count = 0;
@@ -473,15 +478,15 @@ void setup_console(int i, console_t* console) {
 
 
 void replicate_attacker(attacker_t* attacker) {
-	debugf_uart("replicate attacker #%d count=%d\n", attacker->id, attacker->replicas_count);
-	replicate(LOW, ATTACKER_MAGIC | attacker->id, attacker, ATTACKER_PAYLOAD_SIZE, attacker->replicas_count, true, true, attacker->replicas);
-	debugf_uart("replicas: %p - %p\n", attacker->replicas[0], attacker->replicas[attacker->replicas_count-1]);
+	debugf_uart("replicate attacker #%d min_replicas=%d count=%d\n", attacker->id, attacker->min_replicas, ATTACKER_REPLICAS);
+	replicate(LOW, ATTACKER_MAGIC | attacker->id, attacker, ATTACKER_PAYLOAD_SIZE, ATTACKER_REPLICAS, true, true, attacker->replicas);
+	debugf_uart("replicas: %p - %p\n", attacker->replicas[0], attacker->replicas[ATTACKER_REPLICAS-1]);
 	//dump_game_state();
 }
 
 void update_attacker(attacker_t* attacker) {
 	//debugf_uart("updating attacker replicas: %p %p %p %p\n", attacker->replicas[0], attacker->replicas[1], attacker->replicas[2], attacker->replicas[3]);
-	update_replicas(attacker->replicas, attacker, ATTACKER_PAYLOAD_SIZE, attacker->replicas_count, true);
+	update_replicas(attacker->replicas, attacker, ATTACKER_PAYLOAD_SIZE, ATTACKER_REPLICAS, true);
 	//dump_game_state();
 }
 
@@ -500,7 +505,7 @@ void shrink_attacker(int idx) {
 			attacker->spawned = false;
 			debugf_uart("shrink %d: despawn\n", idx);
 			// TODO Simplify this mess --> always replicate all attackers when starting a new level?
-			erase_and_free_replicas(attacker->replicas, attacker->replicas_count);
+			erase_and_free_replicas(attacker->replicas, ATTACKER_REPLICAS);
 		} else {
 			update_attacker(attacker);
 		}
@@ -529,7 +534,7 @@ void spawn_attacker(int idx) {
 	attacker->last_attack = 0.0f;
 	attacker->queue.start = 0;
 	attacker->queue.end = 0;
-	attacker->replicas_count = 1 + (rand() % (ATTACKER_REPLICAS-1));
+	attacker->min_replicas = 18;	// FIXME 2*(1 + (rand() % (ATTACKER_REPLICAS-1)));	// FIXME Varies by level ? (higher threshold for lower levels)
 	debugf_uart("spawn %d: level=%d start=%d end=%d\n", idx, attacker->level, attacker->queue.start, attacker->queue.end);
 	replicate_attacker(attacker);
 	grow_attacker(idx);
@@ -548,15 +553,15 @@ queue_button_t get_attacker_button(int idx, int i) {
 
 
 void replicate_overheat(overheat_t* overheat) {
-	debugf_uart("replicate overheat #%d count=%d\n", overheat->id, overheat->replicas_count);
-	replicate(LOWEST, OVERHEAT_MAGIC | overheat->id, overheat, OVERHEAT_PAYLOAD_SIZE, overheat->replicas_count, true, true, overheat->replicas);
-	debugf_uart("replicas: %p - %p\n", overheat->replicas[0], overheat->replicas[overheat->replicas_count-1]);
+	debugf_uart("replicate overheat #%d min_replicas=%d count=%d\n", overheat->id, overheat->min_replicas, OVERHEAT_REPLICAS);
+	replicate(LOWEST, OVERHEAT_MAGIC | overheat->id, overheat, OVERHEAT_PAYLOAD_SIZE, OVERHEAT_REPLICAS, true, true, overheat->replicas);
+	debugf_uart("replicas: %p - %p\n", overheat->replicas[0], overheat->replicas[OVERHEAT_REPLICAS-1]);
 	//dump_game_state();
 }
 
 void update_overheat(overheat_t* overheat) {
 	//debugf_uart("updating overheat replicas: %p %p %p %p\n", overheat->replicas[0], overheat->replicas[1], overheat->replicas[2], overheat->replicas[3]);
-	update_replicas(overheat->replicas, overheat, OVERHEAT_PAYLOAD_SIZE, overheat->replicas_count, true);
+	update_replicas(overheat->replicas, overheat, OVERHEAT_PAYLOAD_SIZE, OVERHEAT_REPLICAS, true);
 	//dump_game_state();
 }
 
@@ -569,7 +574,7 @@ void increase_overheat(int idx) {
 		debugf_uart("increase heat %d: level=%d\n", idx, overheat->overheat_level);
 		// Replicate on first spawn, update otherwise
 		if (overheat->replicas[0] == NULL) {
-			overheat->replicas_count = 1 + (rand() % (OVERHEAT_REPLICAS-1));
+			overheat->min_replicas = 20;	// FIXME 2*(1 + (rand() % (OVERHEAT_REPLICAS-1)));	// FIXME Varies by level ? (higher threshold for lower levels)
 			replicate_overheat(overheat);
 		} else {
 			update_overheat(overheat);
@@ -584,12 +589,7 @@ void decrease_overheat(int idx) {
 		overheat->last_overheat = gtime;	// To avoid immediate increase (TODO Add grace period of a few additional seconds?)
 		debugf_uart("decrease heat %d: level=%d\n", idx, overheat->overheat_level);
 		// Replicate on first spawn, update otherwise
-		if (overheat->replicas[0] == NULL) {
-			overheat->replicas_count = 1 + (rand() % (OVERHEAT_REPLICAS-1));
-			replicate_overheat(overheat);
-		} else {
-			update_overheat(overheat);
-		}
+		update_overheat(overheat);
 	}
 }
 
@@ -672,11 +672,11 @@ void clear_level() {
 		memset(particles, 0, sizeof(particles_t));
 
 		attacker_t* attacker = &console_attackers[i];
-		erase_and_free_replicas(attacker->replicas, attacker->replicas_count);
+		erase_and_free_replicas(attacker->replicas, ATTACKER_REPLICAS);
 		memset(attacker, 0, sizeof(attacker_t));
 
 		overheat_t* overheat = &console_overheat[i];
-		erase_and_free_replicas(overheat->replicas, overheat->replicas_count);
+		erase_and_free_replicas(overheat->replicas, OVERHEAT_REPLICAS);
 		memset(overheat, 0, sizeof(overheat_t));
 
 		consoles_count--;
@@ -1080,11 +1080,11 @@ void draw_bars(float height) {
   }
 }
 
-void draw_gauge(int x, int y, int height, int item_width, int spacing, int border, int item_count, int item_max, color_t color) {
+void draw_gauge(int x, int y, int height, int item_width, int spacing, int border, int item_count, int item_max, color_t color, color_t border_color) {
 	rdpq_set_mode_standard();
 	rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
 	rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
-	rdpq_set_prim_color(RGBA32(0, 0, 0, 0xc0));
+	rdpq_set_prim_color(border_color);
 	rdpq_fill_rectangle(x, y, x + 2*border + item_width*item_max + spacing*(item_max-1), y + height);
 	rdpq_set_prim_color(color);
 	for (int i=0; i<item_max; i++) {
@@ -1247,8 +1247,9 @@ void render_2d() {
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 200, "         Heap : %d/%d", stats.used, heap_size);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 16, 210, "  Heaps stats : %s", heaps_buf);
 
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 160, "State     : %d", global_state.game_state);
-	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 170, "Level     : %d", global_state.current_level);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 150, "State     : %d", global_state.game_state);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 160, "Level     : %d", global_state.current_level);
+	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 170, "Ignored   : %d/%d", restored_attackers_ignored, restored_overheat_ignored);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 180, "Port      : %d", current_joypad);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 190, "Reset held: %ldms", held_ms);
 	rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 200, 200, "FPS   : %.2f", display_get_fps());
@@ -1273,6 +1274,7 @@ void render_2d() {
 			for (int i=0; i<consoles_count; i++) {
 				console_t* console = &consoles[i];
 				attacker_t* attacker = &console_attackers[i];
+				overheat_t* overheat = &console_overheat[i];
 
 				T3DVec3 billboardPos = (T3DVec3){{
 					console->position.v[0] - 140 * console->scale.x,
@@ -1329,13 +1331,17 @@ void render_2d() {
 					.width = 32, .height = 32,
 					.scale_x = 0.5f, .scale_y = 0.5f,
 				});
-				draw_gauge(x + 18, 225, 6, 5, 1, 1, level->max_resets_per_console - global_state.level_reset_count_per_console[i], level->max_resets_per_console, RGBA32(0xff, 0xff, 0xff, 0xff));
-				draw_gauge(x + 58, 225, 6, 5, 0, 1, console_overheat[i].overheat_level, 3, RGBA32(0xff, 0xc0 - 0x60 * (console_overheat[i].overheat_level - 1), 0, 0xff));
+				draw_gauge(x + 18, 225, 6, 5, 1, 1, level->max_resets_per_console - global_state.level_reset_count_per_console[i], level->max_resets_per_console, RGBA32(0xff, 0xff, 0xff, 0xff), RGBA32(0, 0, 0, 0xc0));
+				bool overheating = attacker->spawned && attacker->level == QUEUE_LENGTH;
+				draw_gauge(x + 58, 225, 6, 5, 0, 1, overheat->overheat_level, 3,
+					RGBA32(0xff, 0xc0 - 0x60 * (overheat->overheat_level - 1), 0, 0xff),
+					overheating ? RGBA32((int) fabs((fmodf((gtime - overheat->last_overheat) * (overheat->overheat_level + 1), 2.0f) - 1) * 0xff), 0, 0, 0xff) : RGBA32(0, 0, 0, 0xc0)
+				);
 			}
 
 			// Power-off gauge (shared)
 			// TODO Right-to-left ?
-			draw_gauge(284, 10, 6, 10, 1, 1, level->max_power_cycles - global_state.level_power_cycle_count, level->max_power_cycles, RGBA32(0xff, 0xff, 0xff, 0xff));
+			draw_gauge(284, 10, 6, 10, 1, 1, level->max_power_cycles - global_state.level_power_cycle_count, level->max_power_cycles, RGBA32(0xff, 0xff, 0xff, 0xff), RGBA32(0, 0, 0, 0xc0));
 			rdpq_mode_begin();
 				rdpq_set_mode_standard();
 				rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
@@ -1428,16 +1434,51 @@ int main(void) {
 	debugf_uart("Expansion Pak: %d\n", useExpansionPak);
 
 	global_state_t restored_global_state;
+	int restored_global_state_counts;
 	console_t restored_consoles[MAX_CONSOLES];
+	int restored_consoles_counts[MAX_CONSOLES];
 	attacker_t restored_attackers[MAX_CONSOLES];
+	int restored_attackers_counts[MAX_CONSOLES];
 	overheat_t restored_overheat[MAX_CONSOLES];
+	int restored_overheat_counts[MAX_CONSOLES];
 
 	if (!forceColdBoot) {
 		// Restore game data from heap replicas
-		restored_global_state_count = restore(&restored_global_state, GLOBAL_STATE_PAYLOAD_SIZE, sizeof(global_state_t), 1, GLOBAL_STATE_MAGIC, GLOBAL_STATE_MASK);
-		restored_consoles_count = restore(restored_consoles, CONSOLE_PAYLOAD_SIZE, sizeof(console_t), MAX_CONSOLES, CONSOLE_MAGIC, CONSOLE_MASK);
-		restored_attackers_count = restore(restored_attackers, ATTACKER_PAYLOAD_SIZE, sizeof(attacker_t), MAX_CONSOLES, ATTACKER_MAGIC, ATTACKER_MASK);
-		restored_overheat_count = restore(restored_overheat, OVERHEAT_PAYLOAD_SIZE, sizeof(overheat_t), MAX_CONSOLES, OVERHEAT_MAGIC, OVERHEAT_MASK);
+		restored_global_state_count = restore(&restored_global_state, &restored_global_state_counts, GLOBAL_STATE_PAYLOAD_SIZE, sizeof(global_state_t), 1, GLOBAL_STATE_MAGIC, GLOBAL_STATE_MASK);
+		restored_consoles_count = restore(restored_consoles, restored_consoles_counts, CONSOLE_PAYLOAD_SIZE, sizeof(console_t), MAX_CONSOLES, CONSOLE_MAGIC, CONSOLE_MASK);
+		restored_attackers_count = restore(restored_attackers, restored_attackers_counts, ATTACKER_PAYLOAD_SIZE, sizeof(attacker_t), MAX_CONSOLES, ATTACKER_MAGIC, ATTACKER_MASK);
+		restored_overheat_count = restore(restored_overheat, restored_overheat_counts, OVERHEAT_PAYLOAD_SIZE, sizeof(overheat_t), MAX_CONSOLES, OVERHEAT_MAGIC, OVERHEAT_MASK);
+
+		// TODO Debug
+		if (restored_global_state_count > 0) {
+			debugf_uart("global_state: %d/%d\n", restored_global_state_counts, GLOBAL_STATE_REPLICAS);
+		}
+		if (restored_consoles_count > 0) {
+			debugf_uart("consoles: ");
+			for (int i=0; i<restored_consoles_count; i++) {
+				uint32_t id = restored_consoles[i].id;
+				debugf_uart("%d/%d ", restored_consoles_counts[id], CONSOLE_REPLICAS);
+			}
+			debugf_uart("\n");
+		}
+		if (restored_attackers_count > 0) {
+			debugf_uart("attackers: ");
+			for (int i=0; i<restored_attackers_count; i++) {
+				uint32_t id = restored_attackers[i].id;
+				debugf_uart("%d of %d/%d ", restored_attackers_counts[id], restored_attackers[i].min_replicas, ATTACKER_REPLICAS);
+			}
+			debugf_uart("\n");
+		}
+		if (restored_overheat_count > 0) {
+			debugf_uart("overheat: ");
+			for (int i=0; i<restored_overheat_count; i++) {
+				uint32_t id = restored_overheat[i].id;
+				debugf_uart("%d of %d/%d", restored_overheat_counts[id], restored_overheat[i].min_replicas, OVERHEAT_REPLICAS);
+			}
+			debugf_uart("\n");
+		}
+
+		// TODO Dump heaps over uart ?
 	} else {
 		// TODO Clean all variables (held_ms, ...)
 	}
@@ -1562,6 +1603,11 @@ int main(void) {
 
 				for (int i=0; i<restored_attackers_count; i++) {
 					uint32_t id = restored_attackers[i].id;
+					if (restored_attackers_counts[id] < restored_attackers[i].min_replicas) {
+						debugf_uart("attacker #%d restored with not enough replicas (%d<%d): NOT RESTORING\n", id, restored_attackers_counts[id], restored_attackers[i].min_replicas);
+						restored_attackers_ignored++;
+						continue;
+					}
 					attacker_t* attacker = &console_attackers[id];
 					*attacker = restored_attackers[i];
 					debugf_uart("restored attacker: %d\n", attacker->id);
@@ -1574,6 +1620,11 @@ int main(void) {
 
 				for (int i=0; i<restored_overheat_count; i++) {
 					uint32_t id = restored_overheat[i].id;
+					if (restored_overheat_counts[id] < restored_overheat[i].min_replicas) {
+						debugf_uart("overheat #%d restored with not enough replicas (%d<%d): NOT RESTORING\n", id, restored_overheat_counts[id], restored_overheat[i].min_replicas);
+						restored_overheat_ignored++;
+						continue;
+					}
 					overheat_t* overheat = &console_overheat[id];
 					*overheat = restored_overheat[i];
 					debugf_uart("restored overheat: %d\n", overheat->id);
@@ -1640,6 +1691,10 @@ int main(void) {
 			clear_level();
 			wav64_play(&sfx_gameover, SFX_CHANNEL);
 			play_menu_music();
+			// Initial setup
+			consoles_count = 0;
+			reset_console = -1;
+			init_global_state();
 			set_game_state(GAME_OVER);
 		}
 	}

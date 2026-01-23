@@ -3,12 +3,24 @@
 #include <stdlib.h>
 #include <string.h>
 #include <libdragon.h>
+
 #include "persistence.h"
+
+#include "pc64.h"
+
+static void debugf_uart(char* format, ...) {
+	va_list args;
+	va_start(args, format);
+	vsnprintf(write_buf, sizeof(write_buf), format, args);
+	va_end(args);
+	pc64_uart_write((const uint8_t *)write_buf, strlen(write_buf));
+	debugf(write_buf);
+}
 
 
 #define CHUNK_SIZE 64
 #define CHUNKS_COUNT (((2048-4)*1024)/CHUNK_SIZE)
-#define EXPANSION_CHUNKS_COUNT (((4096-64)*1024)/CHUNK_SIZE)
+#define EXPANSION_CHUNKS_COUNT (((4096-4-64)*1024)/CHUNK_SIZE)
 #define STEP (31)
 #define TOTAL_HEAPS (4)
 
@@ -29,26 +41,26 @@ static uint8_t cached_expansion_heap[EXPANSION_CHUNKS_COUNT][CHUNK_SIZE] __attri
 static heap_t heaps[TOTAL_HEAPS] = {
 	// Highest to lowest retention
 	{
-		.heap = rdram_expansion_heap,
-		.cache = cached_expansion_heap,
-		.len = 256
+		.heap = &rdram_heap[1024],
+		.cache = &cached_heap[1024],
+		.len = 1024	// No need for such a large memory area
+		//.len = (CHUNKS_COUNT-256) & 0xf000	// Make sure heap length works well with our stepping
 	},
 	{
 		.heap = rdram_heap,
 		.cache = cached_heap,
-		.len = 256
+		.len = 1024
 	},
 	{
-		.heap = &rdram_expansion_heap[256],
-		.cache = &cached_expansion_heap[256],
+		.heap = &rdram_expansion_heap[1024],
+		.cache = &cached_expansion_heap[1024],
 		.len = 1024	// No need for such a large memory area
 		//.len = (EXPANSION_CHUNKS_COUNT-1024) & 0xf000	// Make sure heap length works well with our stepping
 	},
 	{
-		.heap = &rdram_heap[256],
-		.cache = &cached_heap[256],
-		.len = 1024	// No need for such a large memory area
-		//.len = (CHUNKS_COUNT-256) & 0xf000	// Make sure heap length works well with our stepping
+		.heap = rdram_expansion_heap,
+		.cache = cached_expansion_heap,
+		.len = 1024
 	}
 };
 
@@ -90,14 +102,14 @@ static void clear_heap(heap_t* heap) {
 static const char zeroblock [64];
 static void dump_heap(heap_t* heap) {
 	/*
-	debugf("heap: %p %p %d/%d\n", heap->heap, heap->cache, heap->used, heap->len);
+	debugf_uart("heap: %p %p %d/%d\n", heap->heap, heap->cache, heap->used, heap->len);
 	for (int i=0; i<heap->len; i+=64) {
 		if (memcmp(&heap->allocated[i], zeroblock, 64) != 0) {
-			debugf("%02x: ", i);
+			debugf_uart("%02x: ", i);
 			for (int k=0; k<64; k++) {
-				debugf("%s", heap->allocated[i+k] ? "#" : "-");
+				debugf_uart("%s", heap->allocated[i+k] ? "#" : "-");
 			}
-			debugf("\n");
+			debugf_uart("\n");
 		}
 	}
 	*/
@@ -130,7 +142,6 @@ void replicate(persistence_level_t level, uint32_t id, void* data, int len, int 
 	int max_heap = TOTAL_HEAPS-1;
 	switch (level) {
 		case HIGHEST:
-			max_heap = 1;
 			break;
 		case LOW:
 			min_heap = 2;
@@ -142,7 +153,7 @@ void replicate(persistence_level_t level, uint32_t id, void* data, int len, int 
 	int heaps_count = (1 + max_heap - min_heap);
 	int replicas_per_heap = replicas / heaps_count;
 	int replicas_remainder = replicas % heaps_count;
-	debugf("replicate: min=%d max=%d per_heap=%d remainder=%d\n", min_heap, max_heap, replicas_per_heap, replicas_remainder);
+	debugf_uart("replicate: min=%d max=%d per_heap=%d remainder=%d\n", min_heap, max_heap, replicas_per_heap, replicas_remainder);
 	assert(replicas == replicas_per_heap * heaps_count + replicas_remainder);
 
     int stored_len = sizeof(uint32_t) + len + sizeof(uint16_t);
@@ -156,16 +167,16 @@ void replicate(persistence_level_t level, uint32_t id, void* data, int len, int 
 
 		int rounds = (j == min_heap) ? replicas_per_heap + replicas_remainder : replicas_per_heap;
 		for (int i=0; i<rounds; i++) {
-			//debugf("alloc_heap(%d, %d, %d);\n", j, stored_len, cached);
+			//debugf_uart("alloc_heap(%d, %d, %d);\n", j, stored_len, cached);
 			void* ptr = alloc_heap(heap, stored_len, cached);
 			memcpy(ptr, &id, sizeof(uint32_t));
 			memcpy(ptr+sizeof(uint32_t), data, len);
 			memcpy(ptr+sizeof(uint32_t)+len, &crc16, sizeof(crc16));
 			// FIXME assert
 			if (memcmp(ptr, &id, sizeof(uint32_t)) != 0 || memcmp(ptr+sizeof(uint32_t), data, len) != 0 || memcmp(ptr+sizeof(uint32_t)+len, &crc16, sizeof(uint16_t)) != 0) {
-				debugf("Copy failed\n");
+				debugf_uart("Copy failed\n");
 			}
-			//debugf(">>> stored object with id 0x%08x @ %p\n", id, ptr);
+			//debugf_uart(">>> stored object with id 0x%08x @ %p\n", id, ptr);
 
 			// Optionally flush cache to RDRAM
 			if (cached && flush) {
@@ -190,7 +201,7 @@ void update_replicas(void** addresses, void* data, int len, int replicas, bool f
 		memcpy(ptr+sizeof(uint32_t)+len, &crc16, sizeof(crc16));
 		// FIXME assert
 		if (memcmp(ptr+sizeof(uint32_t), data, len) != 0 || memcmp(ptr+sizeof(uint32_t)+len, &crc16, sizeof(uint16_t)) != 0) {
-			debugf("Update failed\n");
+			debugf_uart("Update failed\n");
 		}
 		// Optionally flush cache to RDRAM
 		if (((uintptr_t) ptr & 0x80000000) == 0x80000000 && flush) {
@@ -216,16 +227,16 @@ void erase_and_free_replicas(void** addresses, int replicas) {
 			for (int j=0; j<TOTAL_HEAPS; j++) {
 				heap_t* heap = &heaps[j];
 				void* uncached_ptr = (void*) ((uintptr_t) ptr | 0x20000000);
-				//debugf("%p %p %p\n", uncached_ptr, (void*) heap->heap, (void*) &heap->heap[heap->len]);
+				//debugf_uart("%p %p %p\n", uncached_ptr, (void*) heap->heap, (void*) &heap->heap[heap->len]);
 				if (uncached_ptr >= (void*) heap->heap && uncached_ptr < (void*) &heap->heap[heap->len]) {
-					//debugf("address %p / %p in heap %d [%p-%p]\n", ptr, uncached_ptr, j, heap->heap, &heap->heap[heap->len]);
+					//debugf_uart("address %p / %p in heap %d [%p-%p]\n", ptr, uncached_ptr, j, heap->heap, &heap->heap[heap->len]);
 					free_heap(heap, ptr);
 					cleared = true;
 					break;
 				}
 			}
 			if (!cleared) {
-				debugf("no match in heaps for ptr: %p\n", ptr);
+				debugf_uart("no match in heaps for ptr: %p\n", ptr);
 			}
 			assert(cleared);
 		}
@@ -241,7 +252,7 @@ bool contains_id(uint32_t* ids, int len, uint32_t id) {
     return false;
 }
 
-int restore(void* dest, int len, int stride, int max, uint32_t magic, uint32_t mask) {
+int restore(void* dest, int* counts, int len, int stride, int max, uint32_t magic, uint32_t mask) {
 	// Restore from ALL HEAPS
     int restored = 0;
     uint32_t* ids = malloc(max * sizeof(uint32_t));
@@ -256,8 +267,11 @@ int restore(void* dest, int len, int stride, int max, uint32_t magic, uint32_t m
 				uint16_t crc16 = calculate_crc16(ptr+sizeof(uint32_t), len);
 				if (memcmp(ptr+sizeof(uint32_t)+len, &crc16, 2) == 0) {
 					// FIXME heap->allocated[i] = true;
+					uint32_t index = *((uint32_t*) (ptr+sizeof(uint32_t)));
+					assert(index < max);
+					counts[index]++;
 					if (!found) {
-						//debugf("<<< restored object with id 0x%08x @ %p\n", id, ptr);
+						//debugf_uart("<<< restored object with id 0x%08x @ %p\n", id, ptr);
 						memcpy(dest+restored*stride, ptr+sizeof(uint32_t), len);
 						ids[restored] = id;
 						restored++;
@@ -272,8 +286,11 @@ int restore(void* dest, int len, int stride, int max, uint32_t magic, uint32_t m
 				uint16_t crc16 = calculate_crc16(ptr+sizeof(uint32_t), len);
 				if (memcmp(ptr+sizeof(uint32_t)+len, &crc16, 2) == 0) {
 					// FIXME heap->allocated[i] = true;
+					uint32_t index = *((uint32_t*) (ptr+sizeof(uint32_t)));
+					assert(index < max);
+					counts[index]++;
 					if (!found) {
-						//debugf("<<< restored object with id 0x%08x @ %p\n", id, ptr);
+						//debugf_uart("<<< restored object with id 0x%08x @ %p\n", id, ptr);
 						memcpy(dest+restored*stride, ptr+sizeof(uint32_t), len);
 						ids[restored] = id;
 						restored++;
@@ -282,9 +299,14 @@ int restore(void* dest, int len, int stride, int max, uint32_t magic, uint32_t m
 				}
 			}
 		}
+		debugf_uart("restored replicas with index 0 in heap %d: %d\n", j, counts[0]);
 	}
     // TODO Need to keep references to valid replicas in the struct itself ?
-	debugf("Found %d instances\n", restored);
+	debugf_uart("Found %d instances\n", restored);
+	for (int i=0; i<restored; i++) {
+		debugf_uart("id=0x%08x ", ids[i]);
+	}
+	debugf_uart("\n");
     free(ids);
 	return restored;
 }
