@@ -82,6 +82,13 @@ typedef enum {
 	GAME_OVER
 } game_state_t;
 
+typedef enum {
+	OVERHEATED = 0,
+	TOO_MANY_RESETS,
+	TOO_MANY_POWER_CYCLES,
+	PARTIAL_RESTORATION
+} game_over_t;
+
 #define TOTAL_LEVELS (4)
 
 typedef struct {
@@ -252,6 +259,7 @@ volatile uint32_t reset_ticks __attribute__((section(".persistent")));
 typedef struct {
 	uint32_t id;
 	game_state_t game_state;
+	game_over_t game_over;
 	uint8_t current_level;
 	uint32_t reset_count;
 	uint32_t power_cycle_count;
@@ -364,6 +372,11 @@ void reset_global_state () {
 
 void set_game_state(game_state_t state) {
 	global_state.game_state = state;
+	update_global_state();
+}
+
+void set_game_over(game_over_t reason) {
+	global_state.game_over = reason;
 	update_global_state();
 }
 
@@ -752,6 +765,7 @@ void update() {
 						wav64_play(&sfx_gameover, SFX_CHANNEL);
 						play_menu_music();
 						set_game_state(GAME_OVER);
+						set_game_over(OVERHEATED);
 					}
 				}
 			}
@@ -818,6 +832,7 @@ void update() {
 						wav64_play(&sfx_gameover, SFX_CHANNEL);
 						play_menu_music();
 						set_game_state(GAME_OVER);
+						set_game_over(OVERHEATED);
 					}
 				}
 				if (pressed.d_down) {
@@ -1387,6 +1402,20 @@ void render_2d() {
 			rdpq_textparms_t textparms = { .align = ALIGN_CENTER, .width = 320, };
         	rdpq_text_printf(&textparms, FONT_HALODEK, 0, 80, "GAME");
         	rdpq_text_printf(&textparms, FONT_HALODEK, 0, 120, "OVER");
+			switch (global_state.game_over) {
+				case OVERHEATED:
+					rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 10, 140, "Oh no! You console overheated!");
+					break;
+				case TOO_MANY_RESETS:
+					rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 10, 140, "Too many reset for this console! Only %d per console in this level!", levels[global_state.current_level].max_resets_per_console);
+					break;
+				case TOO_MANY_POWER_CYCLES:
+					rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 10, 140, "Too many power cycles! Only %d in this level!", levels[global_state.current_level].max_power_cycles);
+					break;
+				case PARTIAL_RESTORATION:
+					rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 10, 140, "Oops! You destroyed your console! Don't push it next time...");
+					break;
+			}
 			break;
 		}
 	}
@@ -1675,6 +1704,7 @@ int main(void) {
 						wav64_play(&sfx_gameover, SFX_CHANNEL);
 						play_menu_music();
 						set_game_state(GAME_OVER);
+						set_game_over(TOO_MANY_POWER_CYCLES);
 					}
 				}
 			} else {
@@ -1691,6 +1721,7 @@ int main(void) {
 						wav64_play(&sfx_gameover, SFX_CHANNEL);
 						play_menu_music();
 						set_game_state(GAME_OVER);
+						set_game_over(TOO_MANY_RESETS);
 					}
 				}
 			}
@@ -1709,6 +1740,7 @@ int main(void) {
 			reset_console = -1;
 			init_global_state();
 			set_game_state(GAME_OVER);
+			set_game_over(PARTIAL_RESTORATION);
 		}
 	}
 
