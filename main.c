@@ -88,7 +88,9 @@ typedef struct {
 	uint8_t consoles_count;
 	uint16_t attack_rate;
 	float attack_grace_pediod;
+	float attacker_restore_threshold;
 	float overheat_pediod;	// FIXME No need to change this per level
+	float overheat_restore_threshold;
 	uint8_t max_resets_per_console;
 	uint8_t max_power_cycles;
 	uint8_t duration;
@@ -96,10 +98,10 @@ typedef struct {
 } level_t;
 
 const level_t levels[TOTAL_LEVELS] = {
-	{ 1, 9900, 1.0f, 8.0f, 2, 2, 20, "TODO Rules ?" },
-	{ 2, 9900, 1.0f, 8.0f, 2, 1, 30, "In this level, you will have to plug your controller into the slot of each console in order to operate on it. You are allowed to reset each console twice to mitigate overheat. You can also power your console off once, but remember: don't let the memory decay to the point where you'll lose your consoles..." },
-	{ 3, 9800, 0.8f, 8.0f, 1, 1, 45, "Level 3" },
-	{ 4, 9800, 0.8f, 8.0f, 1, 1, 60, "Final Level" }
+	{ 1, 9900, 1.0f, 0.9f, 8.0f, 0.9f, 0, 0, 20, "TODO Rules ?" },
+	{ 2, 9900, 1.0f, 0.8f, 8.0f, 0.8f, 1, 0, 30, "In this level, you will have to plug your controller into the slot of each console in order to operate on it. You are allowed to reset each console twice to mitigate overheat. You can also power your console off once, but remember: don't let the memory decay to the point where you'll lose your consoles..." },
+	{ 3, 9800, 0.8f, 0.5f, 8.0f, 0.6f, 1, 1, 45, "Level 3" },
+	{ 4, 9800, 0.8f, 0.1f, 8.0f, 0.3f, 2, 1, 60, "Final Level" }
 };
 
 #define CONSOLE_MAGIC (0x11223300)
@@ -142,7 +144,7 @@ typedef struct {
 
 #define ATTACKER_MAGIC (0x44556600)
 #define ATTACKER_MASK (0xffffff00)
-#define ATTACKER_REPLICAS (10)	// FIXME Need more replicas for finer control on threshold
+#define ATTACKER_REPLICAS (100)
 
 typedef enum {
 	SATURN = 0,
@@ -188,7 +190,7 @@ typedef struct {
 
 #define OVERHEAT_MAGIC (0x77889900)
 #define OVERHEAT_MASK (0xffffff00)
-#define OVERHEAT_REPLICAS (10)	// FIXME Need more replicas for finer control on threshold
+#define OVERHEAT_REPLICAS (100)
 
 typedef struct {
 	uint32_t id;
@@ -534,7 +536,8 @@ void spawn_attacker(int idx) {
 	attacker->last_attack = 0.0f;
 	attacker->queue.start = 0;
 	attacker->queue.end = 0;
-	attacker->min_replicas = 18;	// FIXME 2*(1 + (rand() % (ATTACKER_REPLICAS-1)));	// FIXME Varies by level ? (higher threshold for lower levels)
+	attacker->min_replicas = (int) ATTACKER_REPLICAS * levels[global_state.current_level].attacker_restore_threshold;
+	attacker->min_replicas += rand() % ((ATTACKER_REPLICAS - attacker->min_replicas) / 3);
 	debugf_uart("spawn %d: level=%d start=%d end=%d\n", idx, attacker->level, attacker->queue.start, attacker->queue.end);
 	replicate_attacker(attacker);
 	grow_attacker(idx);
@@ -574,7 +577,8 @@ void increase_overheat(int idx) {
 		debugf_uart("increase heat %d: level=%d\n", idx, overheat->overheat_level);
 		// Replicate on first spawn, update otherwise
 		if (overheat->replicas[0] == NULL) {
-			overheat->min_replicas = 20;	// FIXME 2*(1 + (rand() % (OVERHEAT_REPLICAS-1)));	// FIXME Varies by level ? (higher threshold for lower levels)
+			overheat->min_replicas = (int) OVERHEAT_REPLICAS * levels[global_state.current_level].overheat_restore_threshold;
+			overheat->min_replicas += rand() % ((OVERHEAT_REPLICAS - overheat->min_replicas) / 3);
 			replicate_overheat(overheat);
 		} else {
 			update_overheat(overheat);
@@ -1321,17 +1325,23 @@ void render_2d() {
 				}
 
 				// Reset and overheat gauges (per console)
+				x = i * 80;
+				if (level->max_resets_per_console > 0) {
+					rdpq_mode_begin();
+						rdpq_set_mode_standard();
+						rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+					rdpq_mode_end();
+					rdpq_sprite_blit(spr_reset, x + 4, 220, NULL);
+					draw_gauge(x + 18, 225, 6, 5, 1, 1, level->max_resets_per_console - global_state.level_reset_count_per_console[i], level->max_resets_per_console, RGBA32(0xff, 0xff, 0xff, 0xff), RGBA32(0, 0, 0, 0xc0));
+				}
 				rdpq_mode_begin();
 					rdpq_set_mode_standard();
 					rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
 				rdpq_mode_end();
-				x = i * 80;
-				rdpq_sprite_blit(spr_reset, x + 4, 220, NULL);
 				rdpq_sprite_blit(spr_swirl, x + 40, 220, &(rdpq_blitparms_t) {
 					.width = 32, .height = 32,
 					.scale_x = 0.5f, .scale_y = 0.5f,
 				});
-				draw_gauge(x + 18, 225, 6, 5, 1, 1, level->max_resets_per_console - global_state.level_reset_count_per_console[i], level->max_resets_per_console, RGBA32(0xff, 0xff, 0xff, 0xff), RGBA32(0, 0, 0, 0xc0));
 				bool overheating = attacker->spawned && attacker->level == QUEUE_LENGTH;
 				draw_gauge(x + 58, 225, 6, 5, 0, 1, overheat->overheat_level, 3,
 					RGBA32(0xff, 0xc0 - 0x60 * (overheat->overheat_level - 1), 0, 0xff),
@@ -1341,12 +1351,14 @@ void render_2d() {
 
 			// Power-off gauge (shared)
 			// TODO Right-to-left ?
-			draw_gauge(284, 10, 6, 10, 1, 1, level->max_power_cycles - global_state.level_power_cycle_count, level->max_power_cycles, RGBA32(0xff, 0xff, 0xff, 0xff), RGBA32(0, 0, 0, 0xc0));
-			rdpq_mode_begin();
-				rdpq_set_mode_standard();
-				rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-			rdpq_mode_end();
-			rdpq_sprite_blit(spr_power, 268, 5, NULL);
+			if (level->max_power_cycles > 0) {
+				draw_gauge(284, 10, 6, 10, 1, 1, level->max_power_cycles - global_state.level_power_cycle_count, level->max_power_cycles, RGBA32(0xff, 0xff, 0xff, 0xff), RGBA32(0, 0, 0, 0xc0));
+				rdpq_mode_begin();
+					rdpq_set_mode_standard();
+					rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+				rdpq_mode_end();
+				rdpq_sprite_blit(spr_power, 268, 5, NULL);
+			}
 
 			// Timer
 			rdpq_sync_pipe();
@@ -1775,6 +1787,8 @@ int main(void) {
 	// TODO Can we keep displaying while reset is held ?!
 	// 	--> show gauge for reset time
 	//	--> By writing over the last framebuffer with CPU only ?
+
+	// TODO cf. pifhang ??
 	
 	return 0;
 }
