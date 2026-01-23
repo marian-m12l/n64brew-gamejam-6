@@ -533,7 +533,7 @@ void spawn_attacker(int idx) {
 	attacker->spawned = true;
 	attacker->rival_type = (rand() % TOTAL_RIVALS);
 	attacker->level = 0;
-	attacker->last_attack = 0.0f;
+	attacker->last_attack = gtime;
 	attacker->queue.start = 0;
 	attacker->queue.end = 0;
 	attacker->min_replicas = (int) ATTACKER_REPLICAS * levels[global_state.current_level].attacker_restore_threshold;
@@ -648,8 +648,6 @@ void load_level(int next_level) {
 		console->position = console_positions[level->consoles_count-1][i];
 		update_console(console);
 	}
-
-	gtime = 0;
 }
 
 void clear_level() {
@@ -887,7 +885,7 @@ void update() {
 	}
 }
 
-static void draw_bg(sprite_t* pattern, sprite_t* gradient, float offset) {
+static void draw_bg(sprite_t* pattern, sprite_t* gradient, float offset, color_t base_color) {
   rdpq_mode_push();
   
   rdpq_set_mode_standard();
@@ -902,8 +900,7 @@ static void draw_bg(sprite_t* pattern, sprite_t* gradient, float offset) {
     rdpq_mode_filter(FILTER_BILINEAR);
   rdpq_mode_end();
 
-  float brightness = 0.75f;
-  rdpq_set_prim_color((color_t){0xcc*brightness, 0xcc*brightness, 0xff, 0xff});
+  rdpq_set_prim_color(base_color);
 
   offset = fmodf(offset, 64.0f);
   rdpq_texparms_t param_pattern = {
@@ -1159,9 +1156,10 @@ void render_3d() {
 
 	switch (global_state.game_state) {
 		case INTRO:
+			draw_bg(bg_pattern, bg_gradient, gtime * 4.0f, RGBA32(0xff, 0xff, 0xcc*0.75f, 0xff));
 			break;
 		case IN_GAME: {
-			draw_bg(bg_pattern, bg_gradient, gtime * 4.0f);
+			draw_bg(bg_pattern, bg_gradient, gtime * 4.0f, RGBA32(0xcc*0.75f, 0xcc*0.75f, 0xff, 0xff));
 			for (int i=0; i<consoles_count; i++) {
 				console_t* console = &consoles[i];
 				t3d_skeleton_update(&console->displayable->skel);
@@ -1224,10 +1222,13 @@ void render_3d() {
 			break;
 		}
 		case NEXT_LEVEL:
+			draw_bg(bg_pattern, bg_gradient, gtime * 4.0f, RGBA32(0xcc*0.75f, 0xcc*0.75f, 0xff, 0xff));
 			break;
 		case FINISHED:
+			draw_bg(bg_pattern, bg_gradient, gtime * 4.0f, RGBA32(0xcc*0.75f, 0xff, 0xcc*0.75f, 0xff));
 			break;
 		case GAME_OVER:
+			draw_bg(bg_pattern, bg_gradient, gtime * 4.0f, RGBA32(0xff, 0xcc*0.75f, 0xcc*0.75f, 0xff));
 			break;
 	}
 }
