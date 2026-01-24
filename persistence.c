@@ -116,9 +116,9 @@ static void dump_heap(heap_t* heap) {
 }
 
 
-static uint16_t calculate_crc16(const uint8_t * data, size_t len) {
+static uint16_t crc16(const uint8_t * data, size_t len, uint16_t init) {
     uint8_t x;
-    uint16_t crc = 0xFFFF;
+    uint16_t crc = init;
 
     while ( len-- )
     {
@@ -133,6 +133,11 @@ static uint16_t calculate_crc16(const uint8_t * data, size_t len) {
     }
 
     return crc;
+}
+
+static uint16_t calculate_crc16(const uint32_t id, const uint8_t * data, size_t len) {
+	uint16_t crc = crc16((uint8_t*) &id, sizeof(uint32_t), 0xffff);
+	return crc16(data, len, crc);
 }
 
 void replicate(persistence_level_t level, uint32_t id, void* data, int len, int replicas, bool cached, bool flush, void** addresses) {
@@ -158,7 +163,7 @@ void replicate(persistence_level_t level, uint32_t id, void* data, int len, int 
 
     int stored_len = sizeof(uint32_t) + len + sizeof(uint16_t);
 	assert(stored_len <= CHUNK_SIZE);
-	uint16_t crc16 = calculate_crc16(data, len);
+	uint16_t crc16 = calculate_crc16(id, data, len);
 	int replica = 0;
 	for (int j=min_heap; j<=max_heap; j++) {
 		heap_t* heap = &heaps[j];
@@ -194,7 +199,8 @@ void replicate(persistence_level_t level, uint32_t id, void* data, int len, int 
 void update_replicas(void** addresses, void* data, int len, int replicas, bool flush) {
     int stored_len = sizeof(uint32_t) + len + sizeof(uint16_t);
 	assert(stored_len <= CHUNK_SIZE);
-	uint16_t crc16 = calculate_crc16(data, len);
+	uint32_t id = *(uint32_t*) addresses[0];	// TODO ??
+	uint16_t crc16 = calculate_crc16(id, data, len);
 	for (int i=0; i<replicas; i++) {
 		uint8_t* ptr = addresses[i];
 		memcpy(ptr+sizeof(uint32_t), data, len);
@@ -264,7 +270,7 @@ int restore(void* dest, int* counts, int len, int stride, int max, uint32_t magi
 			uint32_t id = *(uint32_t*) ptr;
 			bool found = contains_id(ids, max, id);
 			if ((id & mask) == magic) {
-				uint16_t crc16 = calculate_crc16(ptr+sizeof(uint32_t), len);
+				uint16_t crc16 = calculate_crc16(id, ptr+sizeof(uint32_t), len);
 				if (memcmp(ptr+sizeof(uint32_t)+len, &crc16, 2) == 0) {
 					// FIXME heap->allocated[i] = true;
 					uint32_t index = *((uint32_t*) (ptr+sizeof(uint32_t)));
@@ -283,7 +289,7 @@ int restore(void* dest, int* counts, int len, int stride, int max, uint32_t magi
 			ptr = (uint8_t*) &(heap->heap[i]);
 			id = *(uint32_t*) ptr;
 			if ((id & mask) == magic) {
-				uint16_t crc16 = calculate_crc16(ptr+sizeof(uint32_t), len);
+				uint16_t crc16 = calculate_crc16(id, ptr+sizeof(uint32_t), len);
 				if (memcmp(ptr+sizeof(uint32_t)+len, &crc16, 2) == 0) {
 					// FIXME heap->allocated[i] = true;
 					uint32_t index = *((uint32_t*) (ptr+sizeof(uint32_t)));
