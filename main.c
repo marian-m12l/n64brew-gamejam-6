@@ -510,8 +510,8 @@ void shrink_attacker(int idx) {
 	if (attacker->spawned && attacker->level > 0) {
 		// If level was QUEUE_LENGTH, avoid immediate reaction
 		if (attacker->level == QUEUE_LENGTH) {
-			attacker->last_attack = gtime;
-			console_overheat[idx].last_overheat = gtime;
+			attacker->last_attack = global_state.level_timer;
+			console_overheat[idx].last_overheat = global_state.level_timer;
 		}
 		attacker->level--;
 		attacker->queue.start = (attacker->queue.start + 1) % QUEUE_LENGTH;
@@ -533,8 +533,8 @@ void grow_attacker(int idx) {
 		attacker->level++;
 		attacker->queue.buttons[attacker->queue.end] = (rand() % TOTAL_BUTTONS);
 		attacker->queue.end = (attacker->queue.end + 1) % QUEUE_LENGTH;
-		attacker->last_attack = gtime;
-		console_overheat[idx].last_overheat = gtime;
+		attacker->last_attack = global_state.level_timer;
+		console_overheat[idx].last_overheat = global_state.level_timer;
 		debugf_uart("grow %d: level=%d end=%d\n", idx, attacker->level, attacker->queue.end);
 		update_attacker(attacker);
 	}
@@ -546,7 +546,7 @@ void spawn_attacker(int idx) {
 	attacker->spawned = true;
 	attacker->rival_type = (rand() % TOTAL_RIVALS);
 	attacker->level = 0;
-	attacker->last_attack = gtime;
+	attacker->last_attack = levels[global_state.current_level].duration;
 	attacker->queue.start = 0;
 	attacker->queue.end = 0;
 	attacker->min_replicas = (int) ATTACKER_REPLICAS * levels[global_state.current_level].attacker_restore_threshold;
@@ -586,7 +586,7 @@ void increase_overheat(int idx) {
 	if (console_attackers[idx].spawned && console_attackers[idx].level == QUEUE_LENGTH) {
 		overheat->id = idx;
 		overheat->overheat_level++;
-		overheat->last_overheat = gtime;
+		overheat->last_overheat = global_state.level_timer;
 		debugf_uart("increase heat %d: level=%d\n", idx, overheat->overheat_level);
 		// Replicate on first spawn, update otherwise
 		if (overheat->replicas[0] == NULL) {
@@ -603,7 +603,7 @@ void decrease_overheat(int idx) {
 	overheat_t* overheat = &console_overheat[idx];
 	if (console_overheat[idx].overheat_level > 0) {
 		overheat->overheat_level--;
-		overheat->last_overheat = gtime;	// To avoid immediate increase (TODO Add grace period of a few additional seconds?)
+		overheat->last_overheat = global_state.level_timer;	// To avoid immediate increase (TODO Add grace period of a few additional seconds?)
 		debugf_uart("decrease heat %d: level=%d\n", idx, overheat->overheat_level);
 		// Replicate on first spawn, update otherwise
 		update_overheat(overheat);
@@ -613,7 +613,7 @@ void decrease_overheat(int idx) {
 void reset_overheat(int idx) {
 	overheat_t* overheat = &console_overheat[idx];
 	overheat->overheat_level = 0;
-	overheat->last_overheat = 0.0f;
+	overheat->last_overheat = levels[global_state.current_level].duration;
 	debugf_uart("reset %d: level=%d\n", idx, overheat->overheat_level);
 }
 
@@ -752,11 +752,11 @@ void update() {
 				if ((rand() % 10000) > level->attack_rate) {
 					if (!attacker->spawned) {
 						spawn_attacker(i);
-					} else if (attacker->last_attack + level->attack_grace_pediod <= gtime) {
+					} else if (attacker->last_attack - level->attack_grace_pediod >= global_state.level_timer) {
 						grow_attacker(i);
 					}
 				}
-				if (attacker->spawned && attacker->level == QUEUE_LENGTH && overheat->last_overheat + level->overheat_pediod <= gtime) {
+				if (attacker->spawned && attacker->level == QUEUE_LENGTH && overheat->last_overheat - level->overheat_pediod >= global_state.level_timer) {
 					increase_overheat(i);
 					// Game over if reached level 4
 					if (console_overheat[i].overheat_level > 3) {
@@ -1361,7 +1361,7 @@ void render_2d() {
 				bool overheating = attacker->spawned && attacker->level == QUEUE_LENGTH;
 				draw_gauge(x + 58, 225, 6, 5, 0, 1, overheat->overheat_level, 3,
 					RGBA32(0xff, 0xc0 - 0x60 * (overheat->overheat_level - 1), 0, 0xff),
-					overheating ? RGBA32((int) fabs((fmodf((gtime - overheat->last_overheat) * (overheat->overheat_level + 1), 2.0f) - 1) * 0xff), 0, 0, 0xff) : RGBA32(0, 0, 0, 0xc0)
+					overheating ? RGBA32((int) fabs((fmodf((overheat->last_overheat - global_state.level_timer) * (overheat->overheat_level + 1), 2.0f) - 1) * 0xff), 0, 0, 0xff) : RGBA32(0, 0, 0, 0xc0)
 				);
 			}
 
