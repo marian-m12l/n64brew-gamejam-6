@@ -109,16 +109,16 @@ typedef struct {
 
 const level_t levels[TOTAL_LEVELS] = {
 	// cons.	att/s	att.grace	%att	%heat	rst/c	longrst		power	timer	desc
-	{ 1,		0.8f,	0.8f,		0,		0,		0,		false,		0,		20,		"Rules: defend console against competitors, hold buttons, lose if console overheats" },
-	{ 2,		0.5f,	1.5f,		0,		0,		0,		false,		0,		30,		"In this level, you will have to plug your controller into the slot of each console in order to operate on it." },
-	{ 2,		0.5f,	1.5f,		0,		0,		1,		false,		0,		45,		"You are allowed to reset each console once to mitigate overheat" },
-	{ 3,		0.5f,	1.5f,		0.1f,	0,		1,		true,		0,		60,		"Long reset (>5sec) decreases overheat even more. Beware: attacks will continue and other consoles will keep overheating" },
-	{ 3,		0.5f,	1.5f,		0.9f,	0.9f,	0,		false,		1,		60,		"You can power your console off once, but remember: don't let the memory decay to the point where you'll lose your consoles..." },
-	{ 3,		0.8f,	1.0f,		0.8f,	0.8f,	1,		true,		1,		60,		"TODO" },
-	{ 4,		0.8f,	1.0f,		0.8f,	0.8f,	2,		true,		1,		60,		"TODO" },
-	{ 4,		0.8f,	1.0f,		0.8f,	0.8f,	0,		true,		2,		60,		"TODO" },
-	{ 4,		0.8f,	1.0f,		0.8f,	0.8f,	1,		true,		1,		60,		"TODO" },
-	{ 4,		0.8f,	1.0f,		0.8f,	0.8f,	1,		true,		1,		90,		"Final level" }
+	{ 1,		1.5f,	0.8f,		0,		0,		0,		false,		0,		20,		"Rules: defend console against competitors, hold buttons, lose if console overheats" },
+	{ 2,		0.7f,	1.5f,		0,		0,		0,		false,		0,		30,		"In this level, you will have to plug your controller into the slot of each console in order to operate on it." },
+	{ 2,		0.7f,	1.5f,		0,		0,		1,		false,		0,		45,		"You are allowed to reset each console once to mitigate overheat" },
+	{ 3,		0.7f,	1.5f,		0.1f,	0,		1,		true,		0,		60,		"Long reset (>5sec) decreases overheat even more. Beware: attacks will continue and other consoles will keep overheating" },
+	{ 3,		0.7f,	1.5f,		0.9f,	0.9f,	0,		false,		1,		60,		"You can power your console off once, but remember: don't let the memory decay to the point where you'll lose your consoles..." },
+	{ 3,		1.5f,	0.5f,		0.8f,	0.8f,	1,		true,		1,		60,		"TODO" },
+	{ 4,		1.0f,	1.5f,		0.7f,	0.8f,	2,		true,		1,		60,		"TODO" },
+	{ 4,		1.2f,	1.0f,		0.5f,	0.5f,	0,		true,		2,		60,		"TODO" },
+	{ 4,		1.5f,	1.0f,		0.2f,	0.5f,	1,		true,		1,		60,		"TODO" },
+	{ 4,		1.5f,	0.5f,		0.1f,	0.5f,	1,		true,		1,		90,		"Final level" }
 };
 
 #define CONSOLE_MAGIC (0x11223300)
@@ -1298,7 +1298,8 @@ void render_2d() {
 		case INTRO:
 			rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 40, 100, "Bla bla bla... explain game");
 			if (current_joypad != 0) {
-				rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 40, 120, "Please make sure to plug a single controller to the first port");
+				rdpq_textparms_t descparms = { .align = ALIGN_CENTER, .width = 240, .height = 50, .wrap = WRAP_WORD };
+				rdpq_text_printf(&descparms, FONT_BUILTIN_DEBUG_MONO, 40, 120, "Please make sure to plug a single controller to the first port");
 			}
 			break;
 		case IN_GAME: {
