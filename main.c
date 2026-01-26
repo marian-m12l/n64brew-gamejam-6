@@ -92,7 +92,7 @@ typedef enum {
 	PARTIAL_RESTORATION
 } game_over_t;
 
-#define TOTAL_LEVELS (4)
+#define TOTAL_LEVELS (10)
 
 typedef struct {
 	uint8_t consoles_count;
@@ -101,17 +101,24 @@ typedef struct {
 	float attacker_restore_threshold;	// Baseline proportion of replicas required for a successful restoration (lower proportion == more persistent)
 	float overheat_restore_threshold;	// Baseline proportion of replicas required for a successful restoration (lower proportion == more persistent)
 	uint8_t max_resets_per_console;
+	bool allow_long_reset;				// Whether a long-press of the reset button decreases overheat even more
 	uint8_t max_power_cycles;
 	uint8_t duration;					// In seconds
 	char* description;
 } level_t;
 
 const level_t levels[TOTAL_LEVELS] = {
-	// cons.	att/s	att.grace	%att	%heat	rst/c	power	timer	desc
-	{ 1,		0.5f,	1.0f,		0.9f,	0.9f,	0,		0,		20,		"TODO Rules ?" },
-	{ 2,		0.5f,	1.0f,		0.8f,	0.8f,	1,		0,		30,		"In this level, you will have to plug your controller into the slot of each console in order to operate on it. You are allowed to reset each console twice to mitigate overheat. You can also power your console off once, but remember: don't let the memory decay to the point where you'll lose your consoles..." },
-	{ 3,		1.0f,	0.8f,		0.5f,	0.6f,	1,		1,		45,		"Level 3" },
-	{ 4,		1.0f,	0.8f,		0.1f,	0.3f,	2,		1,		60,		"Final Level" }
+	// cons.	att/s	att.grace	%att	%heat	rst/c	longrst		power	timer	desc
+	{ 1,		0.8f,	0.8f,		0,		0,		0,		false,		0,		20,		"Rules: defend console against competitors, hold buttons, lose if console overheats" },
+	{ 2,		0.5f,	1.5f,		0,		0,		0,		false,		0,		30,		"In this level, you will have to plug your controller into the slot of each console in order to operate on it." },
+	{ 2,		0.5f,	1.5f,		0,		0,		1,		false,		0,		45,		"You are allowed to reset each console once to mitigate overheat" },
+	{ 3,		0.5f,	1.5f,		0.1f,	0,		1,		true,		0,		60,		"Long reset (>5sec) decreases overheat even more. Beware: attacks will continue and other consoles will keep overheating" },
+	{ 3,		0.5f,	1.5f,		0.9f,	0.9f,	0,		false,		1,		60,		"You can power your console off once, but remember: don't let the memory decay to the point where you'll lose your consoles..." },
+	{ 3,		0.8f,	1.0f,		0.8f,	0.8f,	1,		true,		1,		60,		"TODO" },
+	{ 4,		0.8f,	1.0f,		0.8f,	0.8f,	2,		true,		1,		60,		"TODO" },
+	{ 4,		0.8f,	1.0f,		0.8f,	0.8f,	0,		true,		2,		60,		"TODO" },
+	{ 4,		0.8f,	1.0f,		0.8f,	0.8f,	1,		true,		1,		60,		"TODO" },
+	{ 4,		0.8f,	1.0f,		0.8f,	0.8f,	1,		true,		1,		90,		"Final level" }
 };
 
 #define CONSOLE_MAGIC (0x11223300)
@@ -1354,27 +1361,27 @@ void render_2d() {
 
 				// Reset and overheat gauges (per console)
 				x = i * 80;
+				rdpq_mode_begin();
+					rdpq_set_mode_standard();
+					rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
+				rdpq_mode_end();
+				rdpq_sprite_blit(spr_swirl, x + 8, 220, &(rdpq_blitparms_t) {
+					.width = 32, .height = 32,
+					.scale_x = 0.5f, .scale_y = 0.5f,
+				});
+				bool overheating = attacker->spawned && attacker->level == QUEUE_LENGTH;
+				draw_gauge(x + 26, 225, 6, 5, 0, 1, overheat->overheat_level, 3,
+					RGBA32(0xff, 0xc0 - 0x60 * (overheat->overheat_level - 1), 0, 0xff),
+					overheating ? RGBA32((int) fabs((fmodf((overheat->last_overheat - global_state.level_timer) * (overheat->overheat_level + 1), 2.0f) - 1) * 0xff), 0, 0, 0xff) : RGBA32(0, 0, 0, 0xc0)
+				);
 				if (level->max_resets_per_console > 0) {
 					rdpq_mode_begin();
 						rdpq_set_mode_standard();
 						rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
 					rdpq_mode_end();
-					rdpq_sprite_blit(spr_reset, x + 4, 220, NULL);
-					draw_gauge(x + 18, 225, 6, 5, 1, 1, level->max_resets_per_console - global_state.level_reset_count_per_console[i], level->max_resets_per_console, RGBA32(0xff, 0xff, 0xff, 0xff), RGBA32(0, 0, 0, 0xc0));
+					rdpq_sprite_blit(spr_reset, x + 44, 220, NULL);
+					draw_gauge(x + 58, 225, 6, 5, 1, 1, level->max_resets_per_console - global_state.level_reset_count_per_console[i], level->max_resets_per_console, RGBA32(0xff, 0xff, 0xff, 0xff), RGBA32(0, 0, 0, 0xc0));
 				}
-				rdpq_mode_begin();
-					rdpq_set_mode_standard();
-					rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-				rdpq_mode_end();
-				rdpq_sprite_blit(spr_swirl, x + 40, 220, &(rdpq_blitparms_t) {
-					.width = 32, .height = 32,
-					.scale_x = 0.5f, .scale_y = 0.5f,
-				});
-				bool overheating = attacker->spawned && attacker->level == QUEUE_LENGTH;
-				draw_gauge(x + 58, 225, 6, 5, 0, 1, overheat->overheat_level, 3,
-					RGBA32(0xff, 0xc0 - 0x60 * (overheat->overheat_level - 1), 0, 0xff),
-					overheating ? RGBA32((int) fabs((fmodf((overheat->last_overheat - global_state.level_timer) * (overheat->overheat_level + 1), 2.0f) - 1) * 0xff), 0, 0, 0xff) : RGBA32(0, 0, 0, 0xc0)
-				);
 			}
 
 			// Power-off gauge (shared)
@@ -1733,7 +1740,7 @@ int main(void) {
 								if (overheat->overheat_level > 0) {
 									debugf_uart("DECREASE overheat of RESET CONSOLE: %d\n", i);
 									decrease_overheat(i);
-									if (held_ms >= LONG_RESET_THRESHOLD) {
+									if (levels[global_state.current_level].allow_long_reset && held_ms >= LONG_RESET_THRESHOLD) {
 										debugf_uart("DECREASE AGAIN overheat of RESET CONSOLE: %d held=%d\n", i, held_ms);
 										decrease_overheat(i);
 									}
@@ -1741,7 +1748,7 @@ int main(void) {
 							} else {
 								attacker_t* attacker = &console_attackers[i];
 								// For long presses of the reset button, apply attacks/overheat to the other consoles
-								if (held_ms > LONG_RESET_GRACE_PERIOD) {
+								if (levels[global_state.current_level].allow_long_reset && held_ms > LONG_RESET_GRACE_PERIOD) {
 									float replay_ms = held_ms - LONG_RESET_GRACE_PERIOD;
 									bool overheating = attacker->spawned && attacker->level == QUEUE_LENGTH;
 									if (overheating) {
