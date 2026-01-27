@@ -107,20 +107,6 @@ typedef struct {
 	char* description;
 } level_t;
 
-const level_t levels[TOTAL_LEVELS] = {
-	// cons.	att/s	att.grace	%att	%heat	rst/c	longrst		power	timer	desc
-	{ 1,		1.5f,	0.8f,		0,		0,		0,		false,		0,		20,		"Rules: defend console against competitors, hold buttons, lose if console overheats" },
-	{ 2,		0.7f,	1.5f,		0,		0,		0,		false,		0,		30,		"In this level, you will have to plug your controller into the slot of each console in order to operate on it." },
-	{ 2,		0.7f,	1.5f,		0,		0,		1,		false,		0,		45,		"You are allowed to reset each console once to mitigate overheat" },
-	{ 3,		0.7f,	1.5f,		0.1f,	0,		1,		true,		0,		60,		"Long reset (>5sec) decreases overheat even more. Beware: attacks will continue and other consoles will keep overheating" },
-	{ 3,		0.7f,	1.5f,		0.9f,	0.9f,	0,		false,		1,		60,		"You can power your console off once, but remember: don't let the memory decay to the point where you'll lose your consoles..." },
-	{ 3,		1.5f,	0.5f,		0.8f,	0.8f,	1,		true,		1,		60,		"TODO" },
-	{ 4,		1.0f,	1.5f,		0.7f,	0.8f,	2,		true,		1,		60,		"TODO" },
-	{ 4,		1.2f,	1.0f,		0.5f,	0.5f,	0,		true,		2,		60,		"TODO" },
-	{ 4,		1.5f,	1.0f,		0.2f,	0.5f,	1,		true,		1,		60,		"TODO" },
-	{ 4,		1.5f,	0.5f,		0.1f,	0.5f,	1,		true,		1,		90,		"Final level" }
-};
-
 #define CONSOLE_MAGIC (0x11223300)
 #define CONSOLE_MASK (0xffffff00)
 
@@ -223,6 +209,46 @@ typedef struct {
 #define OVERHEAT_PAYLOAD_SIZE (sizeof(overheat_t)-(sizeof(overheat_t)-offsetof(overheat_t, __exclude)))
 
 
+#define GLOBAL_STATE_MAGIC (0xaabbcc00)
+#define GLOBAL_STATE_MASK (0xffffff00)
+#define GLOBAL_STATE_REPLICAS (200)
+
+typedef struct {
+	uint32_t id;
+	game_state_t game_state;
+	game_over_t game_over;
+	uint8_t current_level;
+	uint32_t reset_count;
+	uint32_t power_cycle_count;
+	uint8_t level_reset_count_per_console[MAX_CONSOLES];
+	uint8_t level_power_cycle_count;
+	float level_timer;
+	bool wrong_joypads_count_displayed;
+	// Exclude remaining fields from replication
+	char __exclude;
+	void* replicas[GLOBAL_STATE_REPLICAS];
+} global_state_t;
+
+#define GLOBAL_STATE_PAYLOAD_SIZE (sizeof(global_state_t)-(sizeof(global_state_t)-offsetof(global_state_t, __exclude)))
+
+global_state_t global_state;
+
+
+const level_t levels[TOTAL_LEVELS] = {
+	// cons.	att/s	att.grace	%att	%heat	rst/c	longrst		power	timer	desc
+	{ 1,		1.5f,	0.8f,		0,		0,		0,		false,		0,		20,		"Rules: defend console against competitors, hold buttons, lose if console overheats" },
+	{ 2,		0.7f,	1.5f,		0,		0,		0,		false,		0,		30,		"In this level, you will have to plug your controller into the slot of each console in order to operate on it." },
+	{ 2,		0.7f,	1.5f,		0,		0,		1,		false,		0,		45,		"You are allowed to reset each console once to mitigate overheat" },
+	{ 3,		0.7f,	1.5f,		0.1f,	0,		1,		true,		0,		60,		"Long reset (>5sec) decreases overheat even more. Beware: attacks will continue and other consoles will keep overheating" },
+	{ 3,		0.7f,	1.5f,		0.9f,	0.9f,	0,		false,		1,		60,		"You can power your console off once, but remember: don't let the memory decay to the point where you'll lose your consoles..." },
+	{ 3,		1.5f,	0.5f,		0.8f,	0.8f,	1,		true,		1,		60,		"TODO" },
+	{ 4,		1.0f,	1.5f,		0.7f,	0.8f,	2,		true,		1,		60,		"TODO" },
+	{ 4,		1.2f,	1.0f,		0.5f,	0.5f,	0,		true,		2,		60,		"TODO" },
+	{ 4,		1.5f,	1.0f,		0.2f,	0.5f,	1,		true,		1,		60,		"TODO" },
+	{ 4,		1.5f,	0.5f,		0.1f,	0.5f,	1,		true,		1,		90,		"Final level" }
+};
+
+
 console_t consoles[MAX_CONSOLES];
 displayable_t console_displayables[MAX_CONSOLES];
 attacker_t console_attackers[MAX_CONSOLES];
@@ -248,44 +274,31 @@ uint32_t held_ms;
 reset_type_t rst;
 bool wrong_joypads_count = false;
 bool paused_wrong_joypads_count = false;
+bool paused = false;
 bool useExpansionPak;
 
 
+global_state_t restored_global_state;
 int restored_global_state_count;
+int restored_global_state_counts;
+
+console_t restored_consoles[MAX_CONSOLES];
 int restored_consoles_count;
+int restored_consoles_counts[MAX_CONSOLES];
+
+attacker_t restored_attackers[MAX_CONSOLES];
 int restored_attackers_count;
-int restored_overheat_count;
+int restored_attackers_counts[MAX_CONSOLES];
 int restored_attackers_ignored;
+
+overheat_t restored_overheat[MAX_CONSOLES];
+int restored_overheat_count;
+int restored_overheat_counts[MAX_CONSOLES];
 int restored_overheat_ignored;
 
 
 volatile int reset_console __attribute__((section(".persistent")));
 volatile uint32_t reset_ticks __attribute__((section(".persistent")));
-
-
-#define GLOBAL_STATE_MAGIC (0xaabbcc00)
-#define GLOBAL_STATE_MASK (0xffffff00)
-#define GLOBAL_STATE_REPLICAS (200)
-
-typedef struct {
-	uint32_t id;
-	game_state_t game_state;
-	game_over_t game_over;
-	uint8_t current_level;
-	uint32_t reset_count;
-	uint32_t power_cycle_count;
-	uint8_t level_reset_count_per_console[MAX_CONSOLES];
-	uint8_t level_power_cycle_count;
-	float level_timer;
-	bool wrong_joypads_count_displayed;
-	// Exclude remaining fields from replication
-	char __exclude;
-	void* replicas[GLOBAL_STATE_REPLICAS];
-} global_state_t;
-
-#define GLOBAL_STATE_PAYLOAD_SIZE (sizeof(global_state_t)-(sizeof(global_state_t)-offsetof(global_state_t, __exclude)))
-
-global_state_t global_state;
 
 
 
@@ -538,14 +551,6 @@ void decrease_overheat(int idx) {
 		debugf_uart("decrease heat %d: level=%d\n", idx, overheat->overheat_level);
 		persist_overheat(overheat);
 	}
-}
-
-void reset_overheat(int idx) {
-	overheat_t* overheat = &console_overheat[idx];
-	overheat->overheat_level = 0;
-	overheat->last_overheat = levels[global_state.current_level].duration;
-	debugf_uart("reset %d: level=%d\n", idx, overheat->overheat_level);
-	persist_overheat(overheat);
 }
 
 void reset_overheat_timer(int idx) {
@@ -1360,6 +1365,14 @@ void render_2d() {
 					}
 				}
 
+#ifdef DEBUG_MODE
+				rdpq_sync_pipe();
+				rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, x, y+20, "%d/%d/%d", restored_attackers_counts[i], attacker->min_replicas, restored_attackers_ignored);
+				rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, x, y+30, "%d/%f", attacker->level, attacker->last_attack);
+				rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, x, y+40, "%d/%d/%d", restored_overheat_counts[i], overheat->min_replicas, restored_overheat_ignored);
+				rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, x, y+50, "%d/%f", overheat->overheat_level, overheat->last_overheat);
+#endif
+
 				// Reset and overheat gauges (per console)
 				x = i * 80;
 				rdpq_mode_begin();
@@ -1495,15 +1508,6 @@ int main(void) {
 
 	useExpansionPak = is_memory_expanded();
 	debugf_uart("Expansion Pak: %d\n", useExpansionPak);
-
-	global_state_t restored_global_state;
-	int restored_global_state_counts;
-	console_t restored_consoles[MAX_CONSOLES];
-	int restored_consoles_counts[MAX_CONSOLES];
-	attacker_t restored_attackers[MAX_CONSOLES];
-	int restored_attackers_counts[MAX_CONSOLES];
-	overheat_t restored_overheat[MAX_CONSOLES];
-	int restored_overheat_counts[MAX_CONSOLES];
 
 	if (!forceColdBoot) {
 		// Restore game data from heap replicas
@@ -1664,6 +1668,19 @@ int main(void) {
 				}
 				debugf_uart("Consoles restored\n");
 
+				for (int i=0; i<restored_overheat_count; i++) {
+					uint32_t id = restored_overheat[i].id;
+					if (restored_overheat_counts[id] < restored_overheat[i].min_replicas) {
+						debugf_uart("overheat #%d restored with not enough replicas (%d<%d): NOT RESTORING\n", id, restored_overheat_counts[id], restored_overheat[i].min_replicas);
+						restored_overheat_ignored++;
+						continue;
+					}
+					overheat_t* overheat = &console_overheat[id];
+					*overheat = restored_overheat[i];
+					debugf_uart("restored overheat: %d\n", overheat->id);
+					replicate_overheat(overheat);
+				}
+
 				for (int i=0; i<restored_attackers_count; i++) {
 					uint32_t id = restored_attackers[i].id;
 					if (restored_attackers_counts[id] < restored_attackers[i].min_replicas) {
@@ -1676,22 +1693,13 @@ int main(void) {
 					debugf_uart("restored attacker: %d\n", attacker->id);
 					if (attacker->spawned) {
 						replicate_attacker(attacker);
+						// Make sure overheat timer makes sense if it was not restored along with attacker
+						if (console_overheat[attacker->id].last_overheat == 0) {
+							reset_overheat_timer(attacker->id);
+						}
 					} else {
 						debugf_uart("restored unspawned attacker --> not replicating\n");
 					}
-				}
-
-				for (int i=0; i<restored_overheat_count; i++) {
-					uint32_t id = restored_overheat[i].id;
-					if (restored_overheat_counts[id] < restored_overheat[i].min_replicas) {
-						debugf_uart("overheat #%d restored with not enough replicas (%d<%d): NOT RESTORING\n", id, restored_overheat_counts[id], restored_overheat[i].min_replicas);
-						restored_overheat_ignored++;
-						continue;
-					}
-					overheat_t* overheat = &console_overheat[id];
-					*overheat = restored_overheat[i];
-					debugf_uart("restored overheat: %d\n", overheat->id);
-					replicate_overheat(overheat);
 				}
 
 				// Load model for each console
@@ -1725,7 +1733,7 @@ int main(void) {
 					inc_level_reset_count_per_console(reset_console);
 					// TODO Handle too many resets in level --> game over? penalty?
 					// TODO Handle too many power cycles in level --> game over
-					if (global_state.level_reset_count_per_console[reset_console] > levels[global_state.current_level].max_resets_per_console) {
+					if (reset_console != -1 && global_state.level_reset_count_per_console[reset_console] > levels[global_state.current_level].max_resets_per_console) {
 						debugf_uart("Too many resets for console %d in level %d: %d > %d\n", reset_console, global_state.current_level, global_state.level_reset_count_per_console[reset_console], levels[global_state.current_level].max_resets_per_console);
 						// TODO Game Over --> display reason?
 						clear_level();
@@ -1747,10 +1755,10 @@ int main(void) {
 									}
 								}
 							} else {
-								attacker_t* attacker = &console_attackers[i];
 								// For long presses of the reset button, apply attacks/overheat to the other consoles
 								if (levels[global_state.current_level].allow_long_reset && held_ms > LONG_RESET_GRACE_PERIOD) {
 									float replay_ms = held_ms - LONG_RESET_GRACE_PERIOD;
+									attacker_t* attacker = &console_attackers[i];
 									bool overheating = attacker->spawned && attacker->level == QUEUE_LENGTH;
 									if (overheating) {
 										debugf_uart("REPLAY OVERHEAT on console #%d: add %f ms\n", i, replay_ms);
@@ -1847,7 +1855,13 @@ int main(void) {
 #endif
 
 		joypad_poll();
-		if (!paused_wrong_joypads_count) {
+		if (current_joypad != -1) {
+			joypad_buttons_t pressed = joypad_get_buttons_pressed(current_joypad);
+			if (pressed.z) {
+				paused = !paused;
+			}
+		}
+		if (!paused_wrong_joypads_count && !paused) {
 			update();
 			dump_game_state();
 		}
