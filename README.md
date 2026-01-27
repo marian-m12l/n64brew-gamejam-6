@@ -32,7 +32,8 @@ In-game: ["Fly away" by Shiru Otaku (DJ Uranus)](https://modarchive.org/index.ph
 
 ## Sound FX
 
-Blip: [from the N64brew-GameJam2024](https://github.com/n64brew/N64brew-GameJam2024)
+Blip, Attack: [from the N64brew-GameJam2024](https://github.com/n64brew/N64brew-GameJam2024)
+Whoosh: ["Whoosh 07" by DRAGON-STUDIO"](https://pixabay.com/sound-effects/film-special-effects-whoosh-07-410877/)
 CRT turning off: ["Cathode screen off #3" by Joseph SARDIN](https://bigsoundbank.com/cathode-screen-off-3-s1785.html)
 Game Over: ["Game Over !!!" by EdenVe](https://opengameart.org/content/game-over-effect-sound)
 

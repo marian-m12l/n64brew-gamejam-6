@@ -55,6 +55,8 @@ static float gtime;
 
 static xm64player_t music;
 static wav64_t sfx_blip;
+static wav64_t sfx_attack;
+static wav64_t sfx_whoosh;
 static wav64_t sfx_crt_off;
 static wav64_t sfx_gameover;
 
@@ -727,7 +729,7 @@ static void play_ingame_music() {
 	stop_music();
 	xm64player_open(&music, "rom:/flyaway.xm64");
     xm64player_set_loop(&music, true);
-    xm64player_set_vol(&music, 0.55);
+    xm64player_set_vol(&music, 0.30);
 	xm64player_play(&music, MUSIC_CHANNEL);
 }
 
@@ -772,6 +774,7 @@ void update() {
 					float threshold = frametime * level->attack_rate;
 					float max_time_between_attacks = 2.0f * (1.0f / level->attack_rate);
 					if (r < threshold || attacker->last_attack - global_state.level_timer >= max_time_between_attacks) {
+						wav64_play(&sfx_attack, SFX_CHANNEL);
 						if (!attacker->spawned) {
 							spawn_attacker(i);
 						} else if (attacker->last_attack - level->attack_grace_pediod >= global_state.level_timer) {
@@ -781,6 +784,7 @@ void update() {
 				}
 				bool overheating = attacker->spawned && attacker->level == QUEUE_LENGTH;
 				if (overheating && overheat->last_overheat - global_state.level_timer >= OVERHEAT_PERIOD) {
+					wav64_play(&sfx_whoosh, SFX_CHANNEL);
 					increase_overheat(i);
 					// Game over if reached level 4
 					if (console_overheat[i].overheat_level > 3) {
@@ -1597,6 +1601,8 @@ int main(void) {
 
 
 	wav64_open(&sfx_blip, "rom:/blip.wav64");
+	wav64_open(&sfx_attack, "rom:/attack.wav64");
+	wav64_open(&sfx_whoosh, "rom:/whoosh.wav64");
 	wav64_open(&sfx_crt_off, "rom://crt_off.wav64");
 	wav64_open(&sfx_gameover, "rom://gameover.wav64");
 
