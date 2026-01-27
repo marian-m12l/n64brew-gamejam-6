@@ -240,7 +240,7 @@ const level_t levels[TOTAL_LEVELS] = {
 	// cons.	att/s	att.grace	%att	%heat	rst/c	longrst		power	timer	desc
 	{ 1,		1.5f,	0.8f,		0,		0,		0,		false,		0,		20,		"Rules: defend console against competitors, hold buttons, lose if console overheats" },
 	{ 2,		0.7f,	1.5f,		0,		0,		0,		false,		0,		30,		"In this level, you will have to plug your controller into the slot of each console in order to operate on it." },
-	{ 2,		0.7f,	1.5f,		0,		0,		1,		false,		0,		45,		"You are allowed to reset each console once to mitigate overheat" },
+	{ 2,		0.7f,	1.5f,		0,		0,		1,		false,		0,		60,		"You are allowed to reset each console once to mitigate overheat" },
 	{ 3,		0.7f,	1.5f,		0.1f,	0,		1,		true,		0,		60,		"Long reset (>5sec) decreases overheat even more. Beware: attacks will continue and other consoles will keep overheating" },
 	{ 3,		0.7f,	1.5f,		0.9f,	0.9f,	0,		false,		1,		60,		"You can power your console off once, but remember: don't let the memory decay to the point where you'll lose your consoles..." },
 	{ 3,		1.5f,	0.5f,		0.8f,	0.8f,	1,		true,		1,		60,		"TODO" },
@@ -277,6 +277,7 @@ reset_type_t rst;
 bool wrong_joypads_count = false;
 bool paused_wrong_joypads_count = false;
 bool paused = false;
+bool in_reset = false;
 bool useExpansionPak;
 
 
@@ -529,7 +530,9 @@ void persist_overheat(overheat_t* overheat) {
 	// Replicate on first spawn, update otherwise
 	if (overheat->replicas[0] == NULL) {
 		overheat->min_replicas = (int) OVERHEAT_REPLICAS * levels[global_state.current_level].overheat_restore_threshold;
-		overheat->min_replicas += rand() % ((OVERHEAT_REPLICAS - overheat->min_replicas) / 3);
+		if (overheat->min_replicas > 0) {
+			overheat->min_replicas += rand() % ((OVERHEAT_REPLICAS - overheat->min_replicas) / 3);
+		}
 		replicate_overheat(overheat);
 	} else {
 		update_overheat(overheat);
@@ -621,7 +624,9 @@ void spawn_attacker(int idx) {
 	attacker->queue.start = 0;
 	attacker->queue.end = 0;
 	attacker->min_replicas = (int) ATTACKER_REPLICAS * levels[global_state.current_level].attacker_restore_threshold;
-	attacker->min_replicas += rand() % ((ATTACKER_REPLICAS - attacker->min_replicas) / 3);
+	if (attacker->min_replicas > 0) {
+		attacker->min_replicas += rand() % ((ATTACKER_REPLICAS - attacker->min_replicas) / 3);
+	}
 	debugf_uart("spawn %d: level=%d start=%d end=%d\n", idx, attacker->level, attacker->queue.start, attacker->queue.end);
 	replicate_attacker(attacker);
 	grow_attacker(idx);
@@ -650,6 +655,7 @@ static void reset_interrupt_callback(void) {
 		// Play sound effect
 		wav64_play(&sfx_crt_off, SFX_CHANNEL);
 	}
+	in_reset = true;
 }
 
 const float console_scales[MAX_CONSOLES] = { 0.18f, 0.18f, 0.13f, 0.10f };
@@ -1867,7 +1873,7 @@ int main(void) {
 				paused = !paused;
 			}
 		}
-		if (!paused_wrong_joypads_count && !paused) {
+		if (!paused_wrong_joypads_count && !paused && !in_reset) {
 			update();
 			dump_game_state();
 		}
