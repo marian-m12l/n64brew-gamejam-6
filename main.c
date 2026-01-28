@@ -1847,19 +1847,23 @@ int main(void) {
 		}
 		wrong_joypads_count = ports > 1;
 		current_joypad = -1;
-		JOYPAD_PORT_FOREACH(port) {
-			if (current_joypad == -1 && joypad_is_connected(port)) {
-				current_joypad = port;
+		if (!wrong_joypads_count) {
+			JOYPAD_PORT_FOREACH(port) {
+				if (current_joypad == -1 && joypad_is_connected(port)) {
+					current_joypad = port;
+				}
 			}
 		}
-
 		joypad_poll();
+
+#ifdef DEBUG_MODE
 		if (current_joypad != -1) {
 			joypad_buttons_t pressed = joypad_get_buttons_pressed(current_joypad);
 			if (pressed.z) {
 				paused = !paused;
 			}
 		}
+#endif
 		if (!paused && !in_reset) {
 			update();
 			dump_game_state();

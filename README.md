@@ -1,9 +1,9 @@
 # Console War
 
-This is my entry for the N64brew Game Jam #6. Protect your N64 consoles against the attacks from the concurrence. Don't let them take over or make you overheat!
+This is my entry for the N64brew Game Jam #6. Protect your N64 consoles against the attacks from competitors. Don't let them take over and make you overheat!
 
 The game controls are... let's say experimental:
-- You play with a single controller that you move across the slots to operate each of your (up to) 4 on-screen consoles
+- You play with a single controller that you move across the ports to operate each of your (up to) 4 on-screen consoles
 - You can reset each console with the hardware reset button
 - You can actually power off your real console for a few seconds to take advantage of RDRAM slow decay and eliminate threats
 
