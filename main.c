@@ -106,6 +106,7 @@ typedef struct {
 	float attack_grace_pediod;			// Grace period after each attack/shrink
 	float attacker_restore_threshold;	// Baseline proportion of replicas required for a successful restoration (lower proportion == more persistent)
 	float overheat_restore_threshold;	// Baseline proportion of replicas required for a successful restoration (lower proportion == more persistent)
+	float high_persistence_threshold;	// Proportion of high-persistence attackers/overheat
 	uint8_t max_resets_per_console;
 	bool allow_long_reset;				// Whether a long-press of the reset button decreases overheat even more
 	uint8_t max_power_cycles;
@@ -240,17 +241,17 @@ global_state_t global_state;
 
 
 const level_t levels[TOTAL_LEVELS] = {
-	// cons.	att/s	att.grace	%att	%heat	rst/c	longrst		power	timer	desc
-	{ 1,		1.5f,	0.8f,		0,		0,		0,		false,		0,		20,		"Your competitors are after you!\n\nPress and hold buttons to defend against attacks, don't let them overheat your console!" },
-	{ 2,		0.7f,	1.5f,		0,		0,		0,		false,		0,		30,		"To defend multiple consoles, plug your controller into the correct slot.\n\nBetter get closer!" },
-	{ 2,		0.7f,	1.5f,		0,		0,		1,		false,		0,		60,		"You are now allowed to reset each console once to mitigate overheat. Hitting the reset button will help you cool the console you're plugged into.\n\nTold ya to get closer!" },
-	{ 3,		0.7f,	1.5f,		0.1f,	0,		1,		true,		0,		60,		"Up next: long reset (holding 5 seconds) can cool you consoles even more.\n\nBeware: attacks will keep coming at your consoles!" },
-	{ 3,		0.7f,	1.5f,		0.9f,	0.9f,	0,		false,		1,		60,		"One last trick in your bag: if things go out of hand, go hit that big power button! Keep the console off for a few seconds, let your enemies feel the slow decay of that dear RDRAM!\n\nBut remember: don't let the memory decay to the point where you'll lose your consoles..." },
-	{ 3,		1.5f,	0.5f,		0.8f,	0.8f,	1,		true,		1,		60,		"Let's make it a bit harder..." },
-	{ 4,		1.0f,	1.5f,		0.7f,	0.8f,	2,		true,		1,		60,		"How about one more console?" },
-	{ 4,		1.2f,	1.0f,		0.5f,	0.5f,	0,		true,		2,		60,		"You're doing good, keep going!" },
-	{ 4,		1.5f,	1.0f,		0.2f,	0.5f,	1,		true,		1,		60,		"Almost there..." },
-	{ 4,		1.5f,	0.5f,		0.1f,	0.5f,	1,		true,		1,		90,		"One last effort!" }
+	// cons.	att/s	att.grace	%att	%heat	%hipersist	rst/c	longrst		power	timer	desc
+	{ 1,		1.5f,	0.8f,		0,		0,		0,			0,		false,		0,		20,		"Your competitors are after you!\n\nPress and hold buttons to defend against attacks, don't let them overheat your console!" },
+	{ 2,		0.7f,	1.5f,		0,		0,		0,			0,		false,		0,		30,		"To defend multiple consoles, plug your controller into the correct slot.\n\nBetter get closer!" },
+	{ 2,		1.0f,	1.5f,		0,		0,		0,			1,		false,		0,		60,		"You are now allowed to reset each console once to mitigate overheat. Hitting the RESET button will help you cool the console you're plugged into.\n\nTold ya to get closer!" },
+	{ 3,		0.7f,	1.5f,		0.1f,	0,		0,			1,		true,		0,		60,		"Up next: long reset (holding 5 seconds) can cool your consoles even more.\n\nBeware: attacks will keep coming at your consoles!" },
+	{ 3,		0.7f,	1.5f,		0.9f,	0.9f,	0,			0,		false,		1,		60,		"One last trick in your bag: if things go out of hand, go hit that big POWER switch! Keep the console off for a few seconds, let your enemies feel the slow decay of that dear RDRAM!\n\nBut remember: don't let the memory decay to the point where you'll lose your consoles..." },
+	{ 3,		1.5f,	0.5f,		0.8f,	0.8f,	0.25f,		1,		true,		1,		60,		"Let's make it a bit harder..." },
+	{ 4,		1.0f,	1.5f,		0.7f,	0.8f,	0.25f,		2,		true,		1,		60,		"How about one more console?\n\nOK, you get 2 resets per console this time." },
+	{ 4,		1.2f,	1.0f,		0.5f,	0.5f,	0.35f,		0,		true,		2,		60,		"You're doing good, keep going!\n\nHow about a challenge: no reset, but 2 power offs allowed!" },
+	{ 4,		1.5f,	1.0f,		0.2f,	0.5f,	0.5f,		1,		true,		2,		60,		"Almost there..." },
+	{ 4,		1.5f,	0.5f,		0.1f,	0.5f,	0.75f,		0,		true,		3,		90,		"One last effort!" }
 };
 
 
@@ -510,7 +511,9 @@ void setup_console(int i, console_t* console) {
 
 void replicate_overheat(overheat_t* overheat) {
 	debugf_uart("replicate overheat #%d min_replicas=%d count=%d\n", overheat->id, overheat->min_replicas, OVERHEAT_REPLICAS);
-	replicate(LOWEST, OVERHEAT_MAGIC | overheat->id, overheat, OVERHEAT_PAYLOAD_SIZE, OVERHEAT_REPLICAS, true, true, overheat->replicas);
+	float r = rand() / (float) RAND_MAX;
+	persistence_level_t persistence = r < levels[global_state.current_level].high_persistence_threshold ? HIGHEST : LOWEST;
+	replicate(persistence, OVERHEAT_MAGIC | overheat->id, overheat, OVERHEAT_PAYLOAD_SIZE, OVERHEAT_REPLICAS, true, true, overheat->replicas);
 	debugf_uart("replicas: %p - %p\n", overheat->replicas[0], overheat->replicas[OVERHEAT_REPLICAS-1]);
 	//dump_game_state();
 }
@@ -563,7 +566,9 @@ void reset_overheat_timer(int idx) {
 
 void replicate_attacker(attacker_t* attacker) {
 	debugf_uart("replicate attacker #%d min_replicas=%d count=%d\n", attacker->id, attacker->min_replicas, ATTACKER_REPLICAS);
-	replicate(LOW, ATTACKER_MAGIC | attacker->id, attacker, ATTACKER_PAYLOAD_SIZE, ATTACKER_REPLICAS, true, true, attacker->replicas);
+	float r = rand() / (float) RAND_MAX;
+	persistence_level_t persistence = r < levels[global_state.current_level].high_persistence_threshold ? HIGHEST : LOW;
+	replicate(persistence, ATTACKER_MAGIC | attacker->id, attacker, ATTACKER_PAYLOAD_SIZE, ATTACKER_REPLICAS, true, true, attacker->replicas);
 	debugf_uart("replicas: %p - %p\n", attacker->replicas[0], attacker->replicas[ATTACKER_REPLICAS-1]);
 	//dump_game_state();
 }
