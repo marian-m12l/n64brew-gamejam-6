@@ -1771,12 +1771,16 @@ int main(void) {
 										debugf_uart("REPLAY OVERHEAT on console #%d: add %f ms\n", i, replay_ms);
 										overheat->last_overheat += replay_ms;
 									} else {
-										// TODO Lower attack rate ??
+										// Lower attack rate
 										float factor = 0.5f;
 										int attacks = (replay_ms / 1000.0f) * levels[global_state.current_level].attack_rate * factor;
 										debugf_uart("REPLAY ATTACKS on console #%d: %f ms -> %d attacks\n", i, replay_ms, attacks);
 										for (int j=0; j<attacks; j++) {
-											grow_attacker(i);
+											if (!attacker->spawned) {
+												spawn_attacker(i);
+											} else {
+												grow_attacker(i);
+											}
 										}
 									}
 								}

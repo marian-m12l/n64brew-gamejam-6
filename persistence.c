@@ -203,6 +203,7 @@ void update_replicas(void** addresses, void* data, int len, int replicas, bool f
 	uint16_t crc16 = calculate_crc16(id, data, len);
 	for (int i=0; i<replicas; i++) {
 		uint8_t* ptr = addresses[i];
+		assert(ptr != NULL);
 		memcpy(ptr+sizeof(uint32_t), data, len);
 		memcpy(ptr+sizeof(uint32_t)+len, &crc16, sizeof(crc16));
 		// FIXME assert
