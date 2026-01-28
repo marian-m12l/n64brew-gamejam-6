@@ -16,12 +16,14 @@
 static char __attribute__((aligned(16))) heaps_buf[40];
 
 static void debugf_uart(char* format, ...) {
+#ifdef DEBUG_MODE
 	va_list args;
 	va_start(args, format);
 	vsnprintf(write_buf, sizeof(write_buf), format, args);
 	va_end(args);
 	pc64_uart_write((const uint8_t *)write_buf, strlen(write_buf));
 	debugf(write_buf);
+#endif
 }
 
 
@@ -77,6 +79,8 @@ static sprite_t* spr_power;
 static sprite_t* spr_swirl;
 
 static rdpq_font_t *font_halo_dek;
+static rdpq_textparms_t textparms = { .align = ALIGN_CENTER, .width = 320, };
+static rdpq_textparms_t descparms = { .align = ALIGN_CENTER, .width = 280, .height = 120, .wrap = WRAP_WORD };
 
 
 typedef enum {
@@ -225,7 +229,6 @@ typedef struct {
 	uint8_t level_reset_count_per_console[MAX_CONSOLES];
 	uint8_t level_power_cycle_count;
 	float level_timer;
-	bool wrong_joypads_count_displayed;
 	// Exclude remaining fields from replication
 	char __exclude;
 	void* replicas[GLOBAL_STATE_REPLICAS];
@@ -238,16 +241,16 @@ global_state_t global_state;
 
 const level_t levels[TOTAL_LEVELS] = {
 	// cons.	att/s	att.grace	%att	%heat	rst/c	longrst		power	timer	desc
-	{ 1,		1.5f,	0.8f,		0,		0,		0,		false,		0,		20,		"Rules: defend console against competitors, hold buttons, lose if console overheats" },
-	{ 2,		0.7f,	1.5f,		0,		0,		0,		false,		0,		30,		"In this level, you will have to plug your controller into the slot of each console in order to operate on it." },
-	{ 2,		0.7f,	1.5f,		0,		0,		1,		false,		0,		60,		"You are allowed to reset each console once to mitigate overheat" },
-	{ 3,		0.7f,	1.5f,		0.1f,	0,		1,		true,		0,		60,		"Long reset (>5sec) decreases overheat even more. Beware: attacks will continue and other consoles will keep overheating" },
-	{ 3,		0.7f,	1.5f,		0.9f,	0.9f,	0,		false,		1,		60,		"You can power your console off once, but remember: don't let the memory decay to the point where you'll lose your consoles..." },
-	{ 3,		1.5f,	0.5f,		0.8f,	0.8f,	1,		true,		1,		60,		"TODO" },
-	{ 4,		1.0f,	1.5f,		0.7f,	0.8f,	2,		true,		1,		60,		"TODO" },
-	{ 4,		1.2f,	1.0f,		0.5f,	0.5f,	0,		true,		2,		60,		"TODO" },
-	{ 4,		1.5f,	1.0f,		0.2f,	0.5f,	1,		true,		1,		60,		"TODO" },
-	{ 4,		1.5f,	0.5f,		0.1f,	0.5f,	1,		true,		1,		90,		"Final level" }
+	{ 1,		1.5f,	0.8f,		0,		0,		0,		false,		0,		20,		"Your competitors are after you!\n\nPress and hold buttons to defend against attacks, don't let them overheat your console!" },
+	{ 2,		0.7f,	1.5f,		0,		0,		0,		false,		0,		30,		"To defend multiple consoles, plug your controller into the correct slot.\n\nBetter get closer!" },
+	{ 2,		0.7f,	1.5f,		0,		0,		1,		false,		0,		60,		"You are now allowed to reset each console once to mitigate overheat. Hitting the reset button will help you cool the console you're plugged into.\n\nTold ya to get closer!" },
+	{ 3,		0.7f,	1.5f,		0.1f,	0,		1,		true,		0,		60,		"Up next: long reset (holding 5 seconds) can cool you consoles even more.\n\nBeware: attacks will keep coming at your consoles!" },
+	{ 3,		0.7f,	1.5f,		0.9f,	0.9f,	0,		false,		1,		60,		"One last trick in your bag: if things go out of hand, go hit that big power button! Keep the console off for a few seconds, let your enemies feel the slow decay of that dear RDRAM!\n\nBut remember: don't let the memory decay to the point where you'll lose your consoles..." },
+	{ 3,		1.5f,	0.5f,		0.8f,	0.8f,	1,		true,		1,		60,		"Let's make it a bit harder..." },
+	{ 4,		1.0f,	1.5f,		0.7f,	0.8f,	2,		true,		1,		60,		"How about one more console?" },
+	{ 4,		1.2f,	1.0f,		0.5f,	0.5f,	0,		true,		2,		60,		"You're doing good, keep going!" },
+	{ 4,		1.5f,	1.0f,		0.2f,	0.5f,	1,		true,		1,		60,		"Almost there..." },
+	{ 4,		1.5f,	0.5f,		0.1f,	0.5f,	1,		true,		1,		90,		"One last effort!" }
 };
 
 
@@ -275,7 +278,6 @@ float holding = 0.0f;
 uint32_t held_ms;
 reset_type_t rst;
 bool wrong_joypads_count = false;
-bool paused_wrong_joypads_count = false;
 bool paused = false;
 bool in_reset = false;
 bool useExpansionPak;
@@ -372,7 +374,6 @@ void init_global_state() {
 	memset(&global_state.level_reset_count_per_console, 0, sizeof(global_state.level_reset_count_per_console));
 	global_state.level_power_cycle_count = 0;
 	global_state.level_timer = 0;
-	global_state.wrong_joypads_count_displayed = false;
 	replicate_global_state();
 }
 
@@ -393,7 +394,6 @@ void reset_global_state () {
 	memset(&global_state.level_reset_count_per_console, 0, sizeof(global_state.level_reset_count_per_console));
 	global_state.level_power_cycle_count = 0;
 	global_state.level_timer = 0;
-	global_state.wrong_joypads_count_displayed = false;
 	update_global_state();
 }
 
@@ -429,11 +429,6 @@ void inc_level_power_cycle_count() {
 
 void set_level_timer(float t) {
 	global_state.level_timer = t;
-	update_global_state();
-}
-
-void set_wrong_joypads_count_displayed(bool b) {
-	global_state.wrong_joypads_count_displayed = b;
 	update_global_state();
 }
 
@@ -972,6 +967,7 @@ static void draw_bg(sprite_t* pattern, sprite_t* gradient, float offset, color_t
 
 static void drawprogress(int x, int y, float scale, float progress, color_t col)
 {
+	rdpq_mode_push();
     rdpq_set_mode_standard();
     rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
     rdpq_mode_combiner(RDPQ_COMBINER2(
@@ -985,10 +981,8 @@ static void drawprogress(int x, int y, float scale, float progress, color_t col)
         rdpq_sprite_upload(TILE1, spr_progress, NULL);
     rdpq_tex_multi_end();
     rdpq_texture_rectangle_scaled(TILE0, x, y, x+(32*scale), y+(32*scale), 0, 0, 32, 32);
-    rdpq_set_mode_standard();
-    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-    rdpq_set_prim_color(RGBA32(255, 255, 255, 255));
-    rdpq_mode_combiner(RDPQ_COMBINER1((TEX0,0,PRIM,0), (TEX0,0,PRIM,0)));
+	rdpq_sync_tile();
+	rdpq_mode_push();
 }
 
 
@@ -1313,21 +1307,17 @@ void render_2d() {
 
 	switch (global_state.game_state) {
 		case INTRO:
-			rdpq_textparms_t textparms = { .align = ALIGN_CENTER, .width = 320, };
-        	rdpq_text_printf(&textparms, FONT_HALODEK, 0, 80, "CONSOLE");
-        	rdpq_text_printf(&textparms, FONT_HALODEK, 0, 120, "CLASH");
+        	rdpq_text_printf(&textparms, FONT_HALODEK, 0, 60, "CONSOLE");
+        	rdpq_text_printf(&textparms, FONT_HALODEK, 0, 100, "CLASH");
 			if (current_joypad != 0) {
-				rdpq_textparms_t descparms = { .align = ALIGN_CENTER, .width = 240, .height = 50, .wrap = WRAP_WORD };
-				rdpq_text_printf(&descparms, FONT_BUILTIN_DEBUG_MONO, 40, 120, "Please make sure to plug a single controller to the first port");
+				rdpq_text_printf(&descparms, FONT_BUILTIN_DEBUG_MONO, 20, 110, "Please make sure to plug a single controller to the first port");
 			}
 			break;
 		case IN_GAME: {
 			const level_t* level = &levels[global_state.current_level];
 
-			if (paused_wrong_joypads_count) {
-				rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 40, 100, "Please plug a single joypad");
-			} else if (wrong_joypads_count) {
-				rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 40, 100, "NO NO, plug a single joypad");
+			if (wrong_joypads_count) {
+				rdpq_text_printf(&textparms, FONT_BUILTIN_DEBUG_MONO, 0, 110, "No really, use a single controller!");
 			}
 
 			for (int i=0; i<consoles_count; i++) {
@@ -1425,43 +1415,39 @@ void render_2d() {
 
 			// Timer
 			rdpq_sync_pipe();
-			rdpq_textparms_t textparms = { .align = ALIGN_CENTER, .width = 320, };
         	rdpq_text_printf(&textparms, FONT_HALODEK, 0, 30, "%d", (int) ceilf(global_state.level_timer));
 			break;
 		}
 		case NEXT_LEVEL: {
-			rdpq_textparms_t textparms = { .align = ALIGN_CENTER, .width = 320, };
-			if (global_state.current_level > 0) {
-        		rdpq_text_printf(&textparms, FONT_HALODEK, 0, 100, "LEVEL %d CLEARED!", global_state.current_level);
+			if (global_state.current_level == 0) {
+        		rdpq_text_printf(&textparms, FONT_HALODEK, 0, 60, "LET'S GO!");
+			} else {
+        		rdpq_text_printf(&textparms, FONT_HALODEK, 0, 60, "LEVEL %d CLEARED!", global_state.current_level);
 			}
 			if (global_state.current_level < TOTAL_LEVELS) {
-				rdpq_textparms_t descparms = { .align = ALIGN_LEFT, .width = 300, .height = 50, .wrap = WRAP_WORD };
-				rdpq_text_printf(&descparms, FONT_BUILTIN_DEBUG_MONO, 10, 10, levels[global_state.current_level].description);
+				rdpq_text_printf(&descparms, FONT_BUILTIN_DEBUG_MONO, 20, 110, levels[global_state.current_level].description);
 			}
 			break;
 		}
 		case FINISHED: {
-			rdpq_textparms_t textparms = { .align = ALIGN_CENTER, .width = 320, };
-        	rdpq_text_printf(&textparms, FONT_HALODEK, 0, 100, "CONGRATULATIONS!");
+        	rdpq_text_printf(&textparms, FONT_HALODEK, 0, 60, "CONGRATULATIONS!");
 			break;
 		}
 		case GAME_OVER: {
-			rdpq_textparms_t textparms = { .align = ALIGN_CENTER, .width = 320, };
-        	rdpq_text_printf(&textparms, FONT_HALODEK, 0, 80, "GAME");
-        	rdpq_text_printf(&textparms, FONT_HALODEK, 0, 120, "OVER");
-			rdpq_textparms_t descparms = { .align = ALIGN_CENTER, .width = 300, .height = 50, .wrap = WRAP_WORD };
+        	rdpq_text_printf(&textparms, FONT_HALODEK, 0, 60, "GAME");
+        	rdpq_text_printf(&textparms, FONT_HALODEK, 0, 100, "OVER");
 			switch (global_state.game_over) {
 				case OVERHEATED:
-					rdpq_text_printf(&descparms, FONT_BUILTIN_DEBUG_MONO, 10, 140, "Oh no! You console overheated!");
+					rdpq_text_printf(&descparms, FONT_BUILTIN_DEBUG_MONO, 20, 110, "Oh no! One of your consoles overheated!");
 					break;
 				case TOO_MANY_RESETS:
-					rdpq_text_printf(&descparms, FONT_BUILTIN_DEBUG_MONO, 10, 140, "Too many reset for this console! Only %d per console in this level!", levels[global_state.current_level].max_resets_per_console);
+					rdpq_text_printf(&descparms, FONT_BUILTIN_DEBUG_MONO, 20, 110, "Too many resets for this console! Only %d per console in this level!", levels[global_state.current_level].max_resets_per_console);
 					break;
 				case TOO_MANY_POWER_CYCLES:
-					rdpq_text_printf(&descparms, FONT_BUILTIN_DEBUG_MONO, 10, 140, "Too many power cycles! Only %d in this level!", levels[global_state.current_level].max_power_cycles);
+					rdpq_text_printf(&descparms, FONT_BUILTIN_DEBUG_MONO, 20, 110, "Too many power cycles! Only %d in this level!", levels[global_state.current_level].max_power_cycles);
 					break;
 				case PARTIAL_RESTORATION:
-					rdpq_text_printf(&descparms, FONT_BUILTIN_DEBUG_MONO, 10, 140, "Oops! You destroyed your console! Don't push it next time...");
+					rdpq_text_printf(&descparms, FONT_BUILTIN_DEBUG_MONO, 20, 110, "Oops! You destroyed your console! Don't push it next time...");
 					break;
 			}
 			break;
@@ -1849,26 +1835,12 @@ int main(void) {
 			}
 		}
 		wrong_joypads_count = ports > 1;
-#ifndef DEBUG_MODE
-		if (wrong_joypads_count) {
-			current_joypad = -1;
-			// Pause game and display message
-			if (!global_state.wrong_joypads_count_displayed) {
-				paused_wrong_joypads_count = true;
-				set_wrong_joypads_count_displayed(true);
+		current_joypad = -1;
+		JOYPAD_PORT_FOREACH(port) {
+			if (current_joypad == -1 && joypad_is_connected(port)) {
+				current_joypad = port;
 			}
-		} else {
-#endif
-			paused_wrong_joypads_count = false;
-			current_joypad = -1;
-			JOYPAD_PORT_FOREACH(port) {
-				if (current_joypad == -1 && joypad_is_connected(port)) {
-					current_joypad = port;
-				}
-			}
-#ifndef DEBUG_MODE
 		}
-#endif
 
 		joypad_poll();
 		if (current_joypad != -1) {
@@ -1877,7 +1849,7 @@ int main(void) {
 				paused = !paused;
 			}
 		}
-		if (!paused_wrong_joypads_count && !paused && !in_reset) {
+		if (!paused && !in_reset) {
 			update();
 			dump_game_state();
 		}
