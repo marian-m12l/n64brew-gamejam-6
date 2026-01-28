@@ -1,4 +1,4 @@
-# Console War
+# Console Clash
 
 This is my entry for the N64brew Game Jam #6. Protect your N64 consoles against the attacks from competitors. Don't let them take over and make you overheat!
 
