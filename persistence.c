@@ -9,12 +9,14 @@
 #include "pc64.h"
 
 static void debugf_uart(char* format, ...) {
+#ifdef DEBUG_MODE
 	va_list args;
 	va_start(args, format);
 	vsnprintf(write_buf, sizeof(write_buf), format, args);
 	va_end(args);
 	pc64_uart_write((const uint8_t *)write_buf, strlen(write_buf));
 	debugf(write_buf);
+#endif	
 }
 
 
@@ -22,7 +24,7 @@ static void debugf_uart(char* format, ...) {
 #define CHUNKS_COUNT (((2048-4)*1024)/CHUNK_SIZE)
 #define EXPANSION_CHUNKS_COUNT (((4096-4-64)*1024)/CHUNK_SIZE)
 #define STEP (31)
-#define TOTAL_HEAPS (4)
+#define TOTAL_HEAPS (6)
 
 typedef struct {
 	uint8_t (*heap)[CHUNK_SIZE];
@@ -49,6 +51,16 @@ static heap_t heaps[TOTAL_HEAPS] = {
 	{
 		.heap = rdram_heap,
 		.cache = cached_heap,
+		.len = 1024
+	},
+	{
+		.heap = &rdram_heap[1024*16],
+		.cache = &cached_heap[1024*16],
+		.len = 1024
+	},
+	{
+		.heap = &rdram_heap[1024*24],
+		.cache = &cached_heap[1024*24],
 		.len = 1024
 	},
 	{
@@ -140,11 +152,10 @@ static uint16_t calculate_crc16(const uint32_t id, const uint8_t * data, size_t 
 	return crc16(data, len, crc);
 }
 
-void replicate(persistence_level_t level, uint32_t id, void* data, int len, int replicas, bool cached, bool flush, void** addresses) {
+void replicate(persistence_level_t level, uint32_t id, void* data, int len, int replicas, bool cached, bool flush, bool useExpansionPak, void** addresses) {
 	// FIXME Persistence level should also determine cached / flush behaviour
-	// FIXME Should also determine replicas count ??
 	int min_heap = 0;
-	int max_heap = TOTAL_HEAPS-1;
+	int max_heap = useExpansionPak ? TOTAL_HEAPS-1 : TOTAL_HEAPS-3;
 	switch (level) {
 		case HIGHEST:
 			break;
@@ -152,7 +163,7 @@ void replicate(persistence_level_t level, uint32_t id, void* data, int len, int 
 			min_heap = 2;
 			break;
 		case LOWEST:
-			min_heap = TOTAL_HEAPS-1;
+			min_heap = max_heap;
 			break;
 	}
 	int heaps_count = (1 + max_heap - min_heap);
@@ -327,10 +338,12 @@ void clear_heaps() {
 }
 
 void heaps_stats(char* buffer, int len) {
-	snprintf(buffer, len, "%d/%d %d/%d %d/%d %d/%d",
-		heaps[0].used, heaps[0].len,
-		heaps[1].used, heaps[1].len,
-		heaps[2].used, heaps[2].len,
-		heaps[3].used, heaps[3].len
+	snprintf(buffer, len, "%d %d %d %d %d %d",
+		heaps[0].used,
+		heaps[1].used,
+		heaps[2].used,
+		heaps[3].used,
+		heaps[4].used,
+		heaps[5].used
 	);
 }

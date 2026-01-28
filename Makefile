@@ -7,7 +7,7 @@ include $(T3D_INST)/t3d.mk
 src = main.c persistence.c logo.c entrypoint.S
 
 #N64_CFLAGS = -Wno-error
-N64_CFLAGS := -g -DDEBUG_MODE=1
+N64_CFLAGS := -g -DDEBUG_MODE=1 #-DNO_EXPANSION_PAK=1
 
 N64_LDFLAGS := -Theaps.ld $(N64_LDFLAGS)
 

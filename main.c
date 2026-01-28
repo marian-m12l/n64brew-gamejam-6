@@ -355,7 +355,7 @@ void dump_game_state() {
 
 void replicate_global_state() {
 	debugf_uart("replicate global state\n");
-	replicate(HIGHEST, GLOBAL_STATE_MAGIC, &global_state, GLOBAL_STATE_PAYLOAD_SIZE, GLOBAL_STATE_REPLICAS, true, true, global_state.replicas);
+	replicate(HIGHEST, GLOBAL_STATE_MAGIC, &global_state, GLOBAL_STATE_PAYLOAD_SIZE, GLOBAL_STATE_REPLICAS, true, true, useExpansionPak, global_state.replicas);
 	debugf_uart("replicas: %p - %p\n", global_state.replicas[0], global_state.replicas[GLOBAL_STATE_REPLICAS-1]);
 	//dump_game_state();
 }
@@ -436,7 +436,7 @@ void set_level_timer(float t) {
 
 void replicate_console(console_t* console) {
 	debugf_uart("replicate console #%d\n", console->id);
-	replicate(HIGHEST, CONSOLE_MAGIC | console->id, console, CONSOLE_PAYLOAD_SIZE, CONSOLE_REPLICAS, true, true, console->replicas);
+	replicate(HIGHEST, CONSOLE_MAGIC | console->id, console, CONSOLE_PAYLOAD_SIZE, CONSOLE_REPLICAS, true, true, useExpansionPak, console->replicas);
 	debugf_uart("replicas: %p - %p\n", console->replicas[0], console->replicas[CONSOLE_REPLICAS-1]);
 	//dump_game_state();
 }
@@ -513,7 +513,7 @@ void replicate_overheat(overheat_t* overheat) {
 	debugf_uart("replicate overheat #%d min_replicas=%d count=%d\n", overheat->id, overheat->min_replicas, OVERHEAT_REPLICAS);
 	float r = rand() / (float) RAND_MAX;
 	persistence_level_t persistence = r < levels[global_state.current_level].high_persistence_threshold ? HIGHEST : LOWEST;
-	replicate(persistence, OVERHEAT_MAGIC | overheat->id, overheat, OVERHEAT_PAYLOAD_SIZE, OVERHEAT_REPLICAS, true, true, overheat->replicas);
+	replicate(persistence, OVERHEAT_MAGIC | overheat->id, overheat, OVERHEAT_PAYLOAD_SIZE, OVERHEAT_REPLICAS, true, true, useExpansionPak, overheat->replicas);
 	debugf_uart("replicas: %p - %p\n", overheat->replicas[0], overheat->replicas[OVERHEAT_REPLICAS-1]);
 	//dump_game_state();
 }
@@ -568,7 +568,7 @@ void replicate_attacker(attacker_t* attacker) {
 	debugf_uart("replicate attacker #%d min_replicas=%d count=%d\n", attacker->id, attacker->min_replicas, ATTACKER_REPLICAS);
 	float r = rand() / (float) RAND_MAX;
 	persistence_level_t persistence = r < levels[global_state.current_level].high_persistence_threshold ? HIGHEST : LOW;
-	replicate(persistence, ATTACKER_MAGIC | attacker->id, attacker, ATTACKER_PAYLOAD_SIZE, ATTACKER_REPLICAS, true, true, attacker->replicas);
+	replicate(persistence, ATTACKER_MAGIC | attacker->id, attacker, ATTACKER_PAYLOAD_SIZE, ATTACKER_REPLICAS, true, true, useExpansionPak, attacker->replicas);
 	debugf_uart("replicas: %p - %p\n", attacker->replicas[0], attacker->replicas[ATTACKER_REPLICAS-1]);
 	//dump_game_state();
 }
@@ -1511,7 +1511,9 @@ int main(void) {
 
 	debugf_uart("Joypad poll OK\n");
 
+#ifndef NO_EXPANSION_PAK
 	useExpansionPak = is_memory_expanded();
+#endif
 	debugf_uart("Expansion Pak: %d\n", useExpansionPak);
 
 	if (!forceColdBoot) {
