@@ -1109,6 +1109,8 @@ static void drawsmoke(particles_t* particles, T3DVec3 position, int heat_level) 
     tpx_particle_draw_tex_s8(particles->buffer, particles->particleCount);
 
 	tpx_matrix_pop(1);
+
+	rdpq_sync_pipe();
 	
 	rdpq_mode_pop();
 }
@@ -1311,7 +1313,9 @@ void render_2d() {
 
 	switch (global_state.game_state) {
 		case INTRO:
-			rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, 40, 100, "Bla bla bla... explain game");
+			rdpq_textparms_t textparms = { .align = ALIGN_CENTER, .width = 320, };
+        	rdpq_text_printf(&textparms, FONT_HALODEK, 0, 80, "CONSOLE");
+        	rdpq_text_printf(&textparms, FONT_HALODEK, 0, 120, "CLASH");
 			if (current_joypad != 0) {
 				rdpq_textparms_t descparms = { .align = ALIGN_CENTER, .width = 240, .height = 50, .wrap = WRAP_WORD };
 				rdpq_text_printf(&descparms, FONT_BUILTIN_DEBUG_MONO, 40, 120, "Please make sure to plug a single controller to the first port");
@@ -1476,7 +1480,7 @@ int main(void) {
 	debug_init_isviewer();
 	debug_init_usblog();
 
-	debugf_uart("Console War\n");
+	debugf_uart("Console Clash\n");
 
 	debugf_uart("Boot type: %s\n", rst == RESET_COLD ? "COLD" : "WARM");
 	debugf_uart("held_ms = %ld\n", held_ms);
