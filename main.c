@@ -6,25 +6,15 @@
 #include <t3d/t3dmodel.h>
 #include <t3d/t3dskeleton.h>
 #include <t3d/tpx.h>
-
+#include "game_state.h"
+#include "gfx.h"
 #include "logo.h"
 #include "persistence.h"
-
 #include "pc64.h"
+
 
 // FIXME debug heaps
 static char __attribute__((aligned(16))) heaps_buf[40];
-
-static void debugf_uart(char* format, ...) {
-#ifdef DEBUG_MODE
-	va_list args;
-	va_start(args, format);
-	vsnprintf(write_buf, sizeof(write_buf), format, args);
-	va_end(args);
-	pc64_uart_write((const uint8_t *)write_buf, strlen(write_buf));
-	debugf(write_buf);
-#endif
-}
 
 
 #define FB_COUNT (3)
@@ -33,27 +23,21 @@ static void debugf_uart(char* format, ...) {
 #define SFX_CHANNEL (0)
 #define FONT_HALODEK (2)
 
-#define BUTTON_HOLD_THRESHOLD (0.4f)
-#define OVERHEAT_PERIOD (8.0f)
-#define LONG_RESET_THRESHOLD (5000)
-#define LONG_RESET_GRACE_PERIOD (2000)
+static T3DViewport viewport;
+static T3DVec3 camPos = {{ 0.0f, 70.0f, 120.0f }};
+static T3DVec3 camTarget = {{0,0,0}};
+static uint8_t colorAmbient[4] = {80, 80, 100, 0xFF};
+static uint8_t colorDir[4]     = {0xEE, 0xAA, 0xAA, 0xFF};
+static T3DVec3 lightDirVec = {{-1.0f, 1.0f, 1.0f}};
+static int frameIdx = 0;
+static float frametime;
+static float gtime;
 
-T3DViewport viewport;
-T3DVec3 camPos = {{ 0.0f, 70.0f, 120.0f }};
-T3DVec3 camTarget = {{0,0,0}};
-uint8_t colorAmbient[4] = {80, 80, 100, 0xFF};
-uint8_t colorDir[4]     = {0xEE, 0xAA, 0xAA, 0xFF};
-T3DVec3 lightDirVec = {{-1.0f, 1.0f, 1.0f}};
-int frameIdx = 0;
-
-T3DModel* console_model;
-T3DModel* n64_model;
+static T3DModel* console_model;
+static T3DModel* n64_model;
 
 static sprite_t* bg_pattern;
 static sprite_t* bg_gradient;
-
-static float frametime;
-static float gtime;
 
 static xm64player_t music;
 static wav64_t sfx_blip;
@@ -83,378 +67,55 @@ static rdpq_textparms_t textparms = { .align = ALIGN_CENTER, .width = 320, };
 static rdpq_textparms_t descparms = { .align = ALIGN_CENTER, .width = 280, .height = 120, .wrap = WRAP_WORD };
 
 
-typedef enum {
-	INTRO = 0,
-	IN_GAME,
-	NEXT_LEVEL,
-	FINISHED,
-	GAME_OVER
-} game_state_t;
+static int current_joypad = -1;
+static float holding = 0.0f;
+static uint32_t held_ms;
+static reset_type_t rst;
+static bool wrong_joypads_count = false;
+static bool paused = false;
+static bool in_reset = false;
 
-typedef enum {
-	OVERHEATED = 0,
-	TOO_MANY_RESETS,
-	TOO_MANY_POWER_CYCLES,
-	PARTIAL_RESTORATION
-} game_over_t;
 
-#define TOTAL_LEVELS (10)
+static global_state_t restored_global_state;
+static int restored_global_state_count;
+static int restored_global_state_counts;
 
-typedef struct {
-	uint8_t consoles_count;
-	float attack_rate;					// Average attacks per second
-	float attack_grace_pediod;			// Grace period after each attack/shrink
-	float attacker_restore_threshold;	// Baseline proportion of replicas required for a successful restoration (lower proportion == more persistent)
-	float overheat_restore_threshold;	// Baseline proportion of replicas required for a successful restoration (lower proportion == more persistent)
-	float high_persistence_threshold;	// Proportion of high-persistence attackers/overheat
-	uint8_t max_resets_per_console;
-	bool allow_long_reset;				// Whether a long-press of the reset button decreases overheat even more
-	uint8_t max_power_cycles;
-	uint8_t duration;					// In seconds
-	char* description;
-} level_t;
+static console_t restored_consoles[MAX_CONSOLES];
+static int restored_consoles_count;
+static int restored_consoles_counts[MAX_CONSOLES];
 
-#define CONSOLE_MAGIC (0x11223300)
-#define CONSOLE_MASK (0xffffff00)
+static attacker_t restored_attackers[MAX_CONSOLES];
+static int restored_attackers_count;
+static int restored_attackers_counts[MAX_CONSOLES];
+static int restored_attackers_ignored;
 
-#define MAX_CONSOLES (4)
-#define CONSOLE_REPLICAS (200)
+static overheat_t restored_overheat[MAX_CONSOLES];
+static int restored_overheat_count;
+static int restored_overheat_counts[MAX_CONSOLES];
+static int restored_overheat_ignored;
 
-typedef struct {
-    // CRT model
-	T3DModel* model;
-    T3DMat4FP* mat_fp;
-	T3DSkeleton skel;
-	int bone;
-    rspq_block_t* dpl;
-    // Console model
-	T3DModel* model2;
-    T3DMat4FP* mat_fp2;
-    rspq_block_t* dpl2;
-	// CRT screen
-	surface_t offscreen_surf;
-	surface_t offscreen_surf_z;
-} displayable_t;
 
-typedef struct {
-	uint32_t id;
-    T3DVec3 scale;
-    T3DVec3 rotation;
-    T3DVec3 position;
-	// Exclude remaining fields from replication
-	char __exclude;
-	displayable_t* displayable;	// Link to the displayable data is stale and must updated when restoring
-	void* replicas[CONSOLE_REPLICAS];	// Replica pointers may be stale and must be updated when restoring
-} console_t;
-
-#define CONSOLE_PAYLOAD_SIZE (sizeof(console_t)-(sizeof(console_t)-offsetof(console_t, __exclude)))
+static volatile int reset_console __attribute__((section(".persistent")));
+static volatile uint32_t reset_ticks __attribute__((section(".persistent")));
 
 
 
-#define ATTACKER_MAGIC (0x44556600)
-#define ATTACKER_MASK (0xffffff00)
-#define ATTACKER_REPLICAS (100)
+// Callback for NMI/Reset interrupt
 
-typedef enum {
-	SATURN = 0,
-	PLAYSTATION
-} rival_t;
-
-#define TOTAL_RIVALS (2)
-
-typedef enum {
-	BTN_A = 0,
-	BTN_B,
-	BTN_C_UP,
-	BTN_C_DOWN,
-} queue_button_t;
-
-#define TOTAL_BUTTONS (4)
-
-#define QUEUE_LENGTH (4)
-
-typedef struct {
-	queue_button_t buttons[QUEUE_LENGTH];
-	uint8_t start;
-	uint8_t end;
-} attack_queue_t;
-
-typedef struct {
-	uint32_t id;
-	bool spawned;
-	rival_t rival_type;		// Logo
-	attack_queue_t queue;	// Queue of buttons to be held
-	uint8_t level;			// Buttons in queue
-	float last_attack;		// Time of the latest attack or shrink
-	int min_replicas;		// Actual (partly random) number of replicas required for a successful restoration (lower == more persistent)
-	// TODO Random persistence level
-	// TODO Vary strength (requires longer buttons presses? attacks faster? ...)
-	// Exclude remaining fields from replication
-	char __exclude;
-	void* replicas[ATTACKER_REPLICAS];
-} attacker_t;
-
-#define ATTACKER_PAYLOAD_SIZE (sizeof(attacker_t)-(sizeof(attacker_t)-offsetof(attacker_t, __exclude)))
-
-
-
-#define OVERHEAT_MAGIC (0x77889900)
-#define OVERHEAT_MASK (0xffffff00)
-#define OVERHEAT_REPLICAS (100)
-
-typedef struct {
-	uint32_t id;
-	int overheat_level;		// 3 levels of smoke
-	float last_overheat;	// Time of the latest level change
-	int min_replicas;		// Actual (partly random) number of replicas required for a successful restoration (lower == more persistent)
-	// TODO Random persistence level
-	// Exclude remaining fields from replication
-	char __exclude;
-	void* replicas[OVERHEAT_REPLICAS];
-} overheat_t;
-
-#define OVERHEAT_PAYLOAD_SIZE (sizeof(overheat_t)-(sizeof(overheat_t)-offsetof(overheat_t, __exclude)))
-
-
-#define GLOBAL_STATE_MAGIC (0xaabbcc00)
-#define GLOBAL_STATE_MASK (0xffffff00)
-#define GLOBAL_STATE_REPLICAS (200)
-
-typedef struct {
-	uint32_t id;
-	game_state_t game_state;
-	game_over_t game_over;
-	uint8_t current_level;
-	uint32_t reset_count;
-	uint32_t power_cycle_count;
-	uint8_t level_reset_count_per_console[MAX_CONSOLES];
-	uint8_t level_power_cycle_count;
-	float level_timer;
-	// Exclude remaining fields from replication
-	char __exclude;
-	void* replicas[GLOBAL_STATE_REPLICAS];
-} global_state_t;
-
-#define GLOBAL_STATE_PAYLOAD_SIZE (sizeof(global_state_t)-(sizeof(global_state_t)-offsetof(global_state_t, __exclude)))
-
-global_state_t global_state;
-
-
-const level_t levels[TOTAL_LEVELS] = {
-	// cons.	att/s	att.grace	%att	%heat	%hipersist	rst/c	longrst		power	timer	desc
-	{ 1,		1.5f,	0.8f,		0,		0,		0,			0,		false,		0,		20,		"Your competitors are after you!\n\nPress and hold buttons to defend against attacks, don't let them overheat your console!" },
-	{ 2,		0.7f,	1.5f,		0,		0,		0,			0,		false,		0,		30,		"To defend multiple consoles, plug your controller into the correct slot.\n\nBetter get closer!" },
-	{ 2,		1.0f,	1.5f,		0,		0,		0,			1,		false,		0,		60,		"You are now allowed to reset each console once to mitigate overheat. Hitting the RESET button will help you cool the console you're plugged into.\n\nTold ya to get closer!" },
-	{ 3,		0.7f,	1.5f,		0.1f,	0,		0,			1,		true,		0,		60,		"Up next: long reset (holding 5 seconds) can cool your consoles even more.\n\nBeware: attacks will keep coming at your consoles!" },
-	{ 3,		0.7f,	1.5f,		0.9f,	0.9f,	0,			0,		false,		1,		60,		"One last trick in your bag: if things go out of hand, go hit that big POWER switch! Keep the console off for a few seconds, let your enemies feel the slow decay of that dear RDRAM!\n\nBut remember: don't let the memory decay to the point where you'll lose your consoles..." },
-	{ 3,		1.5f,	0.5f,		0.8f,	0.8f,	0.25f,		1,		true,		1,		60,		"Let's make it a bit harder..." },
-	{ 4,		1.0f,	1.5f,		0.7f,	0.8f,	0.25f,		2,		true,		1,		60,		"How about one more console?\n\nOK, you get 2 resets per console this time." },
-	{ 4,		1.2f,	1.0f,		0.5f,	0.5f,	0.35f,		0,		true,		2,		60,		"You're doing good, keep going!\n\nHow about a challenge: no reset, but 2 power offs allowed!" },
-	{ 4,		1.5f,	1.0f,		0.2f,	0.5f,	0.5f,		1,		true,		2,		60,		"Almost there..." },
-	{ 4,		1.5f,	0.5f,		0.1f,	0.5f,	0.75f,		0,		true,		3,		90,		"One last effort!" }
-};
-
-
-console_t consoles[MAX_CONSOLES];
-displayable_t console_displayables[MAX_CONSOLES];
-attacker_t console_attackers[MAX_CONSOLES];
-overheat_t console_overheat[MAX_CONSOLES];
-
-
-// One particle system per console
-uint32_t particleCountMax = 72;
-typedef struct {
-	uint32_t particleCount;
-	TPXParticleS8* buffer;
-	T3DMat4FP* mat_fp;
-	float tpx_time;
-	float timeTile;
-	int currentPart;
-} particles_t;
-static particles_t console_particles[MAX_CONSOLES];
-
-uint32_t consoles_count = 0;
-int current_joypad = -1;
-float holding = 0.0f;
-uint32_t held_ms;
-reset_type_t rst;
-bool wrong_joypads_count = false;
-bool paused = false;
-bool in_reset = false;
-bool useExpansionPak;
-
-
-global_state_t restored_global_state;
-int restored_global_state_count;
-int restored_global_state_counts;
-
-console_t restored_consoles[MAX_CONSOLES];
-int restored_consoles_count;
-int restored_consoles_counts[MAX_CONSOLES];
-
-attacker_t restored_attackers[MAX_CONSOLES];
-int restored_attackers_count;
-int restored_attackers_counts[MAX_CONSOLES];
-int restored_attackers_ignored;
-
-overheat_t restored_overheat[MAX_CONSOLES];
-int restored_overheat_count;
-int restored_overheat_counts[MAX_CONSOLES];
-int restored_overheat_ignored;
-
-
-volatile int reset_console __attribute__((section(".persistent")));
-volatile uint32_t reset_ticks __attribute__((section(".persistent")));
-
-
-
-
-void dump_game_state() {
-#if 0	
-	debugf_uart("==========\n");
-	// Global state
-	debugf_uart("\tGLOB: %d | %d || %02d | %02d | %02d %02d %02d %02d | %02d || %06.3f || %d\n",
-		global_state.game_state, global_state.current_level,
-		global_state.reset_count, global_state.power_cycle_count,
-		global_state.level_reset_count_per_console[0], global_state.level_reset_count_per_console[1], global_state.level_reset_count_per_console[2], global_state.level_reset_count_per_console[3],
-		global_state.level_power_cycle_count,
-		global_state.level_timer,
-		global_state.wrong_joypads_count_displayed
-	);
-	// Consoles
-	debugf_uart("\tCONS: %d || %d %04.3f || %d %04.3f || %d %04.3f || %d %04.3f\n",
-		consoles_count,
-		consoles[0].id, consoles[0].scale.x,
-		consoles[1].id, consoles[1].scale.x,
-		consoles[2].id, consoles[2].scale.x,
-		consoles[3].id, consoles[3].scale.x
-	);
-	// Attackers
-	for (int i=0; i<MAX_CONSOLES; i++) {
-		attacker_t* attacker = &console_attackers[i];
-		debugf_uart("\tATTK: %d | %d || %d || %d %d %d %d || %d | %d || %d | %06.3f\n",
-			attacker->id, attacker->spawned,
-			attacker->rival_type,
-			attacker->queue.buttons[0], attacker->queue.buttons[1], attacker->queue.buttons[2], attacker->queue.buttons[3],
-			attacker->queue.start, attacker->queue.end,
-			attacker->level, attacker->last_attack
-		);
+static void reset_interrupt_callback(void) {
+	// Keep track of the time the player pressed the reset button
+	reset_ticks = TICKS_READ() | 1;
+	if (global_state.game_state == IN_GAME) {
+		// Keep track of the current console
+		reset_console = current_joypad;
+		// Play sound effect
+		wav64_play(&sfx_crt_off, SFX_CHANNEL);
 	}
-	// Overheat
-	debugf_uart("\tHEAT: %d %d %06.3f || %d %d %06.3f || %d %d %06.3f || %d %d %06.3f\n",
-		console_overheat[0].id, console_overheat[0].overheat_level, console_overheat[0].last_overheat,
-		console_overheat[1].id, console_overheat[1].overheat_level, console_overheat[1].last_overheat,
-		console_overheat[2].id, console_overheat[2].overheat_level, console_overheat[2].last_overheat,
-		console_overheat[3].id, console_overheat[3].overheat_level, console_overheat[3].last_overheat
-	);
-	debugf_uart("==========\n");
-#endif
+	in_reset = true;
 }
 
 
-
-void replicate_global_state() {
-	debugf_uart("replicate global state\n");
-	replicate(HIGHEST, GLOBAL_STATE_MAGIC, &global_state, GLOBAL_STATE_PAYLOAD_SIZE, GLOBAL_STATE_REPLICAS, true, true, useExpansionPak, global_state.replicas);
-	debugf_uart("replicas: %p - %p\n", global_state.replicas[0], global_state.replicas[GLOBAL_STATE_REPLICAS-1]);
-	//dump_game_state();
-}
-
-void update_global_state() {
-	//debugf_uart("updating global state replicas: %p %p %p %p\n", global_state.replicas[0], global_state.replicas[1], global_state.replicas[2], global_state.replicas[3]);
-	update_replicas(global_state.replicas, &global_state, GLOBAL_STATE_PAYLOAD_SIZE, GLOBAL_STATE_REPLICAS, true);
-	//dump_game_state();
-}
-
-void init_global_state() {
-	global_state.id = 0;
-	global_state.game_state = INTRO;
-	global_state.current_level = 0;
-	global_state.reset_count = 0;
-	global_state.power_cycle_count = 0;
-	memset(&global_state.level_reset_count_per_console, 0, sizeof(global_state.level_reset_count_per_console));
-	global_state.level_power_cycle_count = 0;
-	global_state.level_timer = 0;
-	replicate_global_state();
-}
-
-void reset_level_global_state(int next_level) {
-	global_state.current_level = next_level;
-	memset(&global_state.level_reset_count_per_console, 0, sizeof(global_state.level_reset_count_per_console));
-	global_state.level_power_cycle_count = 0;
-	global_state.level_timer = levels[next_level].duration;
-	update_global_state();
-}
-
-void reset_global_state () {
-	global_state.id = 0;
-	global_state.game_state = INTRO;
-	global_state.current_level = 0;
-	global_state.reset_count = 0;
-	global_state.power_cycle_count = 0;
-	memset(&global_state.level_reset_count_per_console, 0, sizeof(global_state.level_reset_count_per_console));
-	global_state.level_power_cycle_count = 0;
-	global_state.level_timer = 0;
-	update_global_state();
-}
-
-void set_game_state(game_state_t state) {
-	global_state.game_state = state;
-	update_global_state();
-}
-
-void set_game_over(game_over_t reason) {
-	global_state.game_over = reason;
-	update_global_state();
-}
-
-void inc_reset_count() {
-	global_state.reset_count++;
-	update_global_state();
-}
-
-void inc_power_cycle_count() {
-	global_state.power_cycle_count++;
-	update_global_state();
-}
-
-void inc_level_reset_count_per_console(int idx) {
-	global_state.level_reset_count_per_console[idx]++;
-	update_global_state();
-}
-
-void inc_level_power_cycle_count() {
-	global_state.level_power_cycle_count++;
-	update_global_state();
-}
-
-void set_level_timer(float t) {
-	global_state.level_timer = t;
-	update_global_state();
-}
-
-
-void replicate_console(console_t* console) {
-	debugf_uart("replicate console #%d\n", console->id);
-	replicate(HIGHEST, CONSOLE_MAGIC | console->id, console, CONSOLE_PAYLOAD_SIZE, CONSOLE_REPLICAS, true, true, useExpansionPak, console->replicas);
-	debugf_uart("replicas: %p - %p\n", console->replicas[0], console->replicas[CONSOLE_REPLICAS-1]);
-	//dump_game_state();
-}
-
-void update_console(console_t* console) {
-	//debugf_uart("updating console replicas: %p %p %p %p\n", console->replicas[0], console->replicas[1], console->replicas[2], console->replicas[3]);
-	update_replicas(console->replicas, console, CONSOLE_PAYLOAD_SIZE, CONSOLE_REPLICAS, true);
-	//dump_game_state();
-}
-
-console_t* add_console() {
-	console_t* console = &consoles[consoles_count];
-	debugf_uart("add console #%d (%p)\n", consoles_count, console);
-	console->id = consoles_count;
-	console->displayable = &console_displayables[consoles_count];
-	consoles_count++;
-	return console;
-}
+// Console setup
 
 // This is a callback for t3d_model_draw_custom, it is used when a texture in a model is set to dynamic/"reference"
 void dynamic_tex_cb(void* userData, const T3DMaterial* material, rdpq_texparms_t *tileParams, rdpq_tile_t tile) {
@@ -477,7 +138,7 @@ void dynamic_tex_cb(void* userData, const T3DMaterial* material, rdpq_texparms_t
   }
 }
 
-void setup_console(int i, console_t* console) {
+static void setup_console(int i, console_t* console) {
 	displayable_t* displayable = console->displayable;
 	displayable->model = console_model;
 	displayable->mat_fp = malloc_uncached(sizeof(T3DMat4FP) * FB_COUNT);
@@ -502,161 +163,14 @@ void setup_console(int i, console_t* console) {
 	displayable->dpl2 = rspq_block_end();
 	// Particles
 	particles_t* particles = &console_particles[i];
-	uint32_t allocSize = sizeof(TPXParticleS8) * particleCountMax / 2;
+	uint32_t allocSize = sizeof(TPXParticleS8) * PARTICLE_COUNT_MAX / 2;
 	particles->buffer = malloc_uncached(allocSize);
 	memset(particles->buffer, 0, allocSize);
 	particles->mat_fp = malloc_uncached(sizeof(T3DMat4FP) * FB_COUNT);
 }
 
 
-void replicate_overheat(overheat_t* overheat) {
-	debugf_uart("replicate overheat #%d min_replicas=%d count=%d\n", overheat->id, overheat->min_replicas, OVERHEAT_REPLICAS);
-	float r = rand() / (float) RAND_MAX;
-	persistence_level_t persistence = r < levels[global_state.current_level].high_persistence_threshold ? HIGHEST : LOWEST;
-	replicate(persistence, OVERHEAT_MAGIC | overheat->id, overheat, OVERHEAT_PAYLOAD_SIZE, OVERHEAT_REPLICAS, true, true, useExpansionPak, overheat->replicas);
-	debugf_uart("replicas: %p - %p\n", overheat->replicas[0], overheat->replicas[OVERHEAT_REPLICAS-1]);
-	//dump_game_state();
-}
-
-void update_overheat(overheat_t* overheat) {
-	//debugf_uart("updating overheat replicas: %p %p %p %p\n", overheat->replicas[0], overheat->replicas[1], overheat->replicas[2], overheat->replicas[3]);
-	update_replicas(overheat->replicas, overheat, OVERHEAT_PAYLOAD_SIZE, OVERHEAT_REPLICAS, true);
-	//dump_game_state();
-}
-
-void persist_overheat(overheat_t* overheat) {
-	// Replicate on first spawn, update otherwise
-	if (overheat->replicas[0] == NULL) {
-		overheat->min_replicas = (int) OVERHEAT_REPLICAS * levels[global_state.current_level].overheat_restore_threshold;
-		if (overheat->min_replicas > 0) {
-			overheat->min_replicas += rand() % ((OVERHEAT_REPLICAS - overheat->min_replicas) / 3);
-		}
-		replicate_overheat(overheat);
-	} else {
-		update_overheat(overheat);
-	}
-}
-
-void increase_overheat(int idx) {
-	overheat_t* overheat = &console_overheat[idx];
-	overheat->id = idx;
-	overheat->overheat_level++;
-	overheat->last_overheat = global_state.level_timer;
-	debugf_uart("increase heat %d: level=%d\n", idx, overheat->overheat_level);
-	persist_overheat(overheat);
-}
-
-void decrease_overheat(int idx) {
-	overheat_t* overheat = &console_overheat[idx];
-	if (console_overheat[idx].overheat_level > 0) {
-		overheat->overheat_level--;
-		overheat->last_overheat = global_state.level_timer;	// To avoid immediate increase (TODO Add grace period of a few additional seconds?)
-		debugf_uart("decrease heat %d: level=%d\n", idx, overheat->overheat_level);
-		persist_overheat(overheat);
-	}
-}
-
-void reset_overheat_timer(int idx) {
-	overheat_t* overheat = &console_overheat[idx];
-	overheat->id = idx;
-	overheat->last_overheat = global_state.level_timer;
-	persist_overheat(overheat);
-}
-
-
-void replicate_attacker(attacker_t* attacker) {
-	debugf_uart("replicate attacker #%d min_replicas=%d count=%d\n", attacker->id, attacker->min_replicas, ATTACKER_REPLICAS);
-	float r = rand() / (float) RAND_MAX;
-	persistence_level_t persistence = r < levels[global_state.current_level].high_persistence_threshold ? HIGHEST : LOW;
-	replicate(persistence, ATTACKER_MAGIC | attacker->id, attacker, ATTACKER_PAYLOAD_SIZE, ATTACKER_REPLICAS, true, true, useExpansionPak, attacker->replicas);
-	debugf_uart("replicas: %p - %p\n", attacker->replicas[0], attacker->replicas[ATTACKER_REPLICAS-1]);
-	//dump_game_state();
-}
-
-void update_attacker(attacker_t* attacker) {
-	//debugf_uart("updating attacker replicas: %p %p %p %p\n", attacker->replicas[0], attacker->replicas[1], attacker->replicas[2], attacker->replicas[3]);
-	update_replicas(attacker->replicas, attacker, ATTACKER_PAYLOAD_SIZE, ATTACKER_REPLICAS, true);
-	//dump_game_state();
-}
-
-void shrink_attacker(int idx) {
-	attacker_t* attacker = &console_attackers[idx];
-	if (attacker->spawned && attacker->level > 0) {
-		// If level was QUEUE_LENGTH, avoid immediate reaction
-		if (attacker->level == QUEUE_LENGTH) {
-			attacker->last_attack = global_state.level_timer;
-			reset_overheat_timer(idx);
-		}
-		attacker->level--;
-		attacker->queue.start = (attacker->queue.start + 1) % QUEUE_LENGTH;
-		debugf_uart("shrink %d: level=%d start=%d\n", idx, attacker->level, attacker->queue.start);
-		update_attacker(attacker);
-	}
-}
-
-void grow_attacker(int idx) {
-	attacker_t* attacker = &console_attackers[idx];
-	//debugf_uart("grow_attacker: %f\n", attacker->last_attack - global_state.level_timer);
-	if (attacker->spawned && attacker->level < QUEUE_LENGTH) {
-		if (attacker->level == 0) {
-			// Re-spawning
-			attacker->rival_type = (rand() % TOTAL_RIVALS);
-			// TODO Should have a new random level of persistence?
-		}
-		attacker->level++;
-		attacker->queue.buttons[attacker->queue.end] = (rand() % TOTAL_BUTTONS);
-		attacker->queue.end = (attacker->queue.end + 1) % QUEUE_LENGTH;
-		attacker->last_attack = global_state.level_timer;
-		reset_overheat_timer(idx);
-		debugf_uart("grow %d: level=%d end=%d\n", idx, attacker->level, attacker->queue.end);
-		update_attacker(attacker);
-	}
-}
-
-void spawn_attacker(int idx) {
-	//debugf_uart("spawn_attacker: %f\n", levels[global_state.current_level].duration - global_state.level_timer);
-	attacker_t* attacker = &console_attackers[idx];
-	attacker->id = idx;
-	attacker->spawned = true;
-	attacker->rival_type = (rand() % TOTAL_RIVALS);
-	attacker->level = 0;
-	attacker->last_attack = global_state.level_timer;
-	attacker->queue.start = 0;
-	attacker->queue.end = 0;
-	attacker->min_replicas = (int) ATTACKER_REPLICAS * levels[global_state.current_level].attacker_restore_threshold;
-	if (attacker->min_replicas > 0) {
-		attacker->min_replicas += rand() % ((ATTACKER_REPLICAS - attacker->min_replicas) / 3);
-	}
-	debugf_uart("spawn %d: level=%d start=%d end=%d\n", idx, attacker->level, attacker->queue.start, attacker->queue.end);
-	replicate_attacker(attacker);
-	grow_attacker(idx);
-}
-
-queue_button_t get_attacker_button(int idx, int i) {
-	attack_queue_t* queue = &console_attackers[idx].queue;
-	if (queue->start < queue->end) {
-		return queue->buttons[queue->start + i];
-	} else if (i <= (TOTAL_BUTTONS-1-queue->start)) {
-		return queue->buttons[queue->start + i];
-	} else {
-		return queue->buttons[i - (TOTAL_BUTTONS-queue->start)];
-	}
-}
-
-
-
-// Callback for NMI/Reset interrupt
-static void reset_interrupt_callback(void) {
-	// Keep track of the time the player pressed the reset button
-	reset_ticks = TICKS_READ() | 1;
-	if (global_state.game_state == IN_GAME) {
-		// Keep track of the current console
-		reset_console = current_joypad;
-		// Play sound effect
-		wav64_play(&sfx_crt_off, SFX_CHANNEL);
-	}
-	in_reset = true;
-}
+// Level setup
 
 const float console_scales[MAX_CONSOLES] = { 0.18f, 0.18f, 0.13f, 0.10f };
 const T3DVec3 console_positions[MAX_CONSOLES][MAX_CONSOLES] = {
@@ -724,6 +238,9 @@ void clear_level() {
 	}
 }
 
+
+// Music playback
+
 static void stop_music() {
 	if (music.playing) {
 		xm64player_stop(&music);
@@ -746,6 +263,9 @@ static void play_menu_music() {
     xm64player_set_vol(&music, 0.55);
 	xm64player_play(&music, MUSIC_CHANNEL);
 }
+
+
+// Game logic loop
 
 void update() {
 	t3d_viewport_set_projection(&viewport, T3D_DEG_TO_RAD(45.0f), 10.0f, 150.0f);
@@ -934,217 +454,8 @@ void update() {
 	}
 }
 
-static void draw_bg(sprite_t* pattern, sprite_t* gradient, float offset, color_t base_color) {
-  rdpq_mode_push();
-  
-  rdpq_set_mode_standard();
-  rdpq_mode_begin();
-    rdpq_mode_blender(0);
-    rdpq_mode_alphacompare(0);
-    rdpq_mode_combiner(RDPQ_COMBINER2(
-      (TEX0,0,TEX1,0), (0,0,0,1),
-      (COMBINED,0,PRIM,0), (0,0,0,1)
-    ));
-    rdpq_mode_dithering(DITHER_BAYER_BAYER);
-    rdpq_mode_filter(FILTER_BILINEAR);
-  rdpq_mode_end();
 
-  rdpq_set_prim_color(base_color);
-
-  offset = fmodf(offset, 64.0f);
-  rdpq_texparms_t param_pattern = {
-    .s = {.repeats = REPEAT_INFINITE, .mirror = true, .translate = offset, .scale_log = -1},
-    .t = {.repeats = REPEAT_INFINITE, .mirror = true, .translate = offset, .scale_log = -1},
-  };
-  rdpq_texparms_t param_grad = {
-    .s = {.repeats = REPEAT_INFINITE},
-    .t = {.repeats = 1, .scale_log = 2},
-  };
-  rdpq_tex_multi_begin();
-    rdpq_sprite_upload(TILE0, pattern, &param_pattern);
-    rdpq_sprite_upload(TILE1, gradient, &param_grad);
-  rdpq_tex_multi_end();
-
-  rdpq_texture_rectangle(TILE0, 0,0, display_get_width(), display_get_height(), 0, 0);
-
-  rdpq_mode_pop();
-}
-
-static void drawprogress(int x, int y, float scale, float progress, color_t col)
-{
-	rdpq_mode_push();
-    rdpq_set_mode_standard();
-    rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-    rdpq_mode_combiner(RDPQ_COMBINER2(
-        (TEX1,0,PRIM,0),  (0,0,0,TEX0),
-        (0,0,0,COMBINED), (0,0,0,TEX1)
-    ));
-    rdpq_set_prim_color(col);
-    rdpq_mode_alphacompare((1.0f-progress)*255.0f);
-    rdpq_tex_multi_begin();
-        rdpq_sprite_upload(TILE0, spr_circlemask, NULL);
-        rdpq_sprite_upload(TILE1, spr_progress, NULL);
-    rdpq_tex_multi_end();
-    rdpq_texture_rectangle_scaled(TILE0, x, y, x+(32*scale), y+(32*scale), 0, 0, 32, 32);
-	rdpq_sync_tile();
-	rdpq_mode_push();
-}
-
-
-static void gradient_smoke(uint8_t *color, float t, int heat_level) {
-    t = fminf(1.0f, fmaxf(0.0f, t));
-	// Gray to red-ish
-	color[0] = (uint8_t)(50 * heat_level + 100 * t);
-	color[1] = (uint8_t)(50 + 100 * t);
-	color[2] = (uint8_t)(50 + 100 * t);
-}
-
-
-/**
- * Particle system for a fire effect.
- * This will simulate particles over time by moving them up and changing their color.
- * The current position is used to spawn new particles, so it can move over time leaving a trail behind.
- */
-static void simulate_particles_smoke(particles_t* particles, int heat_level, float posX, float posZ) {
-  int p = particles->currentPart / 2;
-  if(particles->currentPart % (1+(rand() % 3)) == 0) {
-    int8_t *ptPos  = tpx_buffer_s8_get_pos(particles->buffer, p);
-    int8_t *size   = tpx_buffer_s8_get_size(particles->buffer, p);
-    uint8_t *color = tpx_buffer_s8_get_rgba(particles->buffer, p);
-
-    ptPos[0] = posX + (rand() % 16) - 8;
-    ptPos[1] = -126;
-    gradient_smoke(color, 0, heat_level);
-    color[3] = ((PhysicalAddr(ptPos) % 8) * 32);
-
-    ptPos[2] = posZ + (rand() % 16) - 8;
-    *size = 118 + (rand() % 10);
-  }
-  particles->currentPart = (particles->currentPart + 1) % particles->particleCount;
-
-  // move all up by one unit
-  for (int i = 0; i < particles->particleCount/2; i++) {
-    gradient_smoke(particles->buffer[i].colorA, (particles->buffer[i].posA[1] + 127) / 150.0f, heat_level);
-    gradient_smoke(particles->buffer[i].colorB, (particles->buffer[i].posB[1] + 127) / 150.0f, heat_level);
-
-    particles->buffer[i].posA[1] += 1;
-    particles->buffer[i].posB[1] += 1;
-    if(particles->currentPart % 4 == 0) {
-      particles->buffer[i].sizeA -= 2;
-      particles->buffer[i].sizeB -= 2;
-      if(particles->buffer[i].sizeA < 0)	particles->buffer[i].sizeA = 0;
-      if(particles->buffer[i].sizeB < 0)	particles->buffer[i].sizeB = 0;
-    }
-  }
-}
-
-static void drawsmoke(particles_t* particles, T3DVec3 position, int heat_level) {
-	particles->tpx_time += frametime * 1.0f;
-	particles->timeTile += frametime * 25.1f;
-	particles->particleCount = 24 * heat_level;
-	// Move a little around console position ?
-	float posX = position.x + fm_cosf(particles->tpx_time) * 5.0f;
-	float posZ = position.z + fm_sinf(2*particles->tpx_time) * 5.0f;
-
-	rdpq_mode_push();
-
-	simulate_particles_smoke(particles, heat_level, posX, posZ);
-	rdpq_set_env_color((color_t){0xFF, 0xFF, 0xFF, 0xFF});
-
-    rdpq_sync_pipe();
-    rdpq_sync_tile();
-    rdpq_sync_load();
-    rdpq_set_mode_standard();
-    rdpq_mode_antialias(AA_NONE);
-    rdpq_mode_zbuf(true, true);
-    rdpq_mode_zoverride(true, 0, 0);
-    rdpq_mode_filter(FILTER_POINT);
-    rdpq_mode_alphacompare(10);
-
-    rdpq_mode_combiner(RDPQ_COMBINER1((PRIM,0,TEX0,0), (0,0,0,TEX0)));
-
-
-    // Upload texture for the following particles.
-    // The ucode itself never loads or switches any textures,
-    // so you can only use what you have uploaded before in a single draw call.
-    rdpq_texparms_t p = {};
-    p.s.repeats = REPEAT_INFINITE;
-    p.t.repeats = REPEAT_INFINITE;
-    // Texture UVs are internally always mapped to 8x8px tiles across the entire particle.
-    // Even with non-uniform scaling, it is squished into that space.
-    // In order to use differently sized textures (or sections thereof) adjust the scale here.
-    // E.g.: scale_log = 4px=1, 8px=0, 16px=-1, 32px=-2, 64px=-3
-    // This also means that you are limited to power-of-two sizes for a section of a texture.
-    // You can however still have textures with a multiple of a power-of-two size on one axis.
-    int logScale =  - __builtin_ctz(spr_swirl->height / 8);
-    p.s.scale_log = logScale;
-    p.t.scale_log = logScale;
-
-    // For sprite sheets that animate a rotation, we can activate mirroring.
-    // to only require half rotation to be animated.
-    // This works by switching over to the double-mirrored section and repeating the animation,
-    // which is handled internally in the ucode for you if enabled.
-    p.s.mirror = true;
-    p.t.mirror = true;
-    rdpq_sprite_upload(TILE0, spr_swirl, &p);
-
-    tpx_state_from_t3d();
-    
-	t3d_mat4fp_from_srt_euler(&particles->mat_fp[frameIdx],
-		(float[3]){ 6, 6, 6 },
-		(float[3]){ 0.0f, 0.0f, 0.0f },
-		(float[3]){ 0.0f, 850.0f, 0.0f }
-	);
-	tpx_matrix_push(&particles->mat_fp[frameIdx]);
-	
-	float scale = (0.5f + 0.167f * heat_level) * 5 * console_scales[consoles_count-1];
-    tpx_state_set_scale(scale, scale);
-
-    float tileIdx = fm_floorf(particles->timeTile) * 32;
-    if(tileIdx >= 512)	particles->timeTile = 0;
-
-	tpx_state_set_tex_params((int16_t)tileIdx, 8);
-
-    tpx_particle_draw_tex_s8(particles->buffer, particles->particleCount);
-
-	tpx_matrix_pop(1);
-
-	rdpq_sync_pipe();
-	
-	rdpq_mode_pop();
-}
-
-void draw_bars(float height) {
-  if(height > 0) {
-	if (height > 39)	height = 39;
-	// White line in the middle
-	uint8_t intensity = (int) (height * 0xff / 39);
-	rdpq_set_mode_standard();
-	rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-	rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
-	rdpq_set_prim_color(RGBA32(0xff, 0xff, 0xff, intensity));
-	rdpq_fill_rectangle(0, 0, 80, 80);
-	// Black bars top and bottom
-	rdpq_set_prim_color(RGBA32(0, 0, 0, 0xff));
-	rdpq_fill_rectangle(0, 0, 80, height);
-	rdpq_fill_rectangle(0, 80 - height, 80, 80);
-  }
-}
-
-void draw_gauge(int x, int y, int height, int item_width, int spacing, int border, int item_count, int item_max, color_t color, color_t border_color) {
-	rdpq_set_mode_standard();
-	rdpq_mode_blender(RDPQ_BLENDER_MULTIPLY);
-	rdpq_mode_combiner(RDPQ_COMBINER_FLAT);
-	rdpq_set_prim_color(border_color);
-	rdpq_fill_rectangle(x, y, x + 2*border + item_width*item_max + spacing*(item_max-1), y + height);
-	rdpq_set_prim_color(color);
-	for (int i=0; i<item_max; i++) {
-		if (i == item_count) {
-			rdpq_set_prim_color(RGBA32(0x33, 0x33, 0x33, 0xff));
-		}
-		rdpq_fill_rectangle(x + border + item_width*i + spacing*i, y + border, x + border + item_width*(i+1) + spacing*i, y + height - border);
-	}
-}
+// Render to console screens
 
 void render_offscreen() {
 	if (global_state.game_state == IN_GAME) {
@@ -1192,6 +503,9 @@ void render_offscreen() {
 		}
 	}
 }
+
+
+// 3D scene render
 
 void render_3d() {
 	t3d_frame_start();
@@ -1260,7 +574,7 @@ void render_3d() {
 					// Particles
 					if (overheat->overheat_level > 0) {
 						T3DVec3 offset = (T3DVec3){{0, 0, -10.0f}};
-						drawsmoke(&console_particles[i], offset, overheat->overheat_level);
+						drawsmoke(&console_particles[i], offset, console_scales[consoles_count-1], frameIdx, frametime, overheat->overheat_level, spr_swirl);
 					}
 					rdpq_sync_pipe();
 
@@ -1282,6 +596,9 @@ void render_3d() {
 			break;
 	}
 }
+
+
+// 2D overlay render
 
 void render_2d() {
 	rdpq_sync_pipe();
@@ -1347,7 +664,7 @@ void render_2d() {
 						int btn_x = x + (j * 32 * s);
 						queue_button_t btn = get_attacker_button(i, j);
 						if (i == current_joypad && j == 0) {
-							drawprogress(btn_x - (8*s), y - (8*s), s, holding/BUTTON_HOLD_THRESHOLD, RGBA32(255, 0, 0, 255));
+							drawprogress(btn_x - (8*s), y - (8*s), s, holding/BUTTON_HOLD_THRESHOLD, RGBA32(255, 0, 0, 255), spr_progress, spr_circlemask);
 						}
 						sprite_t* spr = NULL;
 						switch (btn) {
@@ -1460,13 +777,22 @@ void render_2d() {
 	}
 }
 
+
+// Game setup, data restoration and main loop
+
 int main(void) {
+
+	// Measure reset time as soon as possible (for warm boot)
+
 	held_ms = TICKS_TO_MS(TICKS_SINCE(reset_ticks));
 	reset_ticks = 0;
 	rst = sys_reset_type();
 	if (rst == RESET_COLD) {
 		held_ms = 0;
 	}
+
+
+	// Init systems
 
 	debug_init_isviewer();
 	debug_init_usblog();
@@ -1511,10 +837,15 @@ int main(void) {
 
 	debugf_uart("Joypad poll OK\n");
 
+	bool useExpansionPak;
 #ifndef NO_EXPANSION_PAK
 	useExpansionPak = is_memory_expanded();
 #endif
 	debugf_uart("Expansion Pak: %d\n", useExpansionPak);
+	init_heaps(useExpansionPak);
+
+
+	// Try to restore game data after a warm or cold boot
 
 	if (!forceColdBoot) {
 		// Restore game data from heap replicas
@@ -1523,7 +854,7 @@ int main(void) {
 		restored_attackers_count = restore(restored_attackers, restored_attackers_counts, ATTACKER_PAYLOAD_SIZE, sizeof(attacker_t), MAX_CONSOLES, ATTACKER_MAGIC, ATTACKER_MASK);
 		restored_overheat_count = restore(restored_overheat, restored_overheat_counts, OVERHEAT_PAYLOAD_SIZE, sizeof(overheat_t), MAX_CONSOLES, OVERHEAT_MAGIC, OVERHEAT_MASK);
 
-		// TODO Debug
+#ifdef DEBUG_MODE
 		if (restored_global_state_count > 0) {
 			debugf_uart("global_state: %d/%d\n", restored_global_state_counts, GLOBAL_STATE_REPLICAS);
 		}
@@ -1553,16 +884,20 @@ int main(void) {
 		}
 
 		// TODO Dump heaps over uart ?
-	} else {
-		// TODO Clean all variables (held_ms, ...)
+#endif
+
+		debugf_uart("Restoration OK\n");
 	}
 
-	debugf_uart("Restoration OK\n");
 
 	// Clear all replicas to avoid bad data in next restoration
+
 	debugf_uart("Clearing heaps\n");
 	clear_heaps();
 	debugf_uart("Heaps cleared\n");
+
+
+	// Check validity of restored data
 
 	bool restored_something = (restored_global_state_count + restored_consoles_count + restored_attackers_count + restored_overheat_count) > 0;
 	bool restored_ok = false;
@@ -1584,9 +919,12 @@ int main(void) {
 			}
 		}
 
-		// TODO Game Over if broken level ??
+		// Game Over if broken level
 		restored_ok = !broken_level;
 	}
+
+
+	// If initializing game from scratch, display logos
 
 	if (!restored_something) {
 		debugf_uart("Entering initial boot sequence\n");
@@ -1602,6 +940,8 @@ int main(void) {
 		debugf_uart("Cold initial sequence OK\n");
 	}
 
+
+	// Load assets
 
 	wav64_open(&sfx_blip, "rom:/blip.wav64");
 	wav64_open(&sfx_attack, "rom:/attack.wav64");
@@ -1635,6 +975,9 @@ int main(void) {
     rdpq_font_style(font_halo_dek, 0, &(rdpq_fontstyle_t){.color = RGBA32(0xFF, 0xFF, 0xFF, 0xFF) });
 	
 	debugf_uart("Resources load OK\n");
+
+
+	// Setup display and tiny3d
 	
 	display_init(RESOLUTION_320x240, DEPTH_16_BPP, FB_COUNT, GAMMA_NONE, FILTERS_RESAMPLE_ANTIALIAS);
 
@@ -1655,6 +998,8 @@ int main(void) {
 	
 	debugf_uart("TPX init OK\n");
 
+
+	// Initialize game state from scratch or from restored data
 	
 	if (restored_something) {
 		if (restored_ok) {
@@ -1811,6 +1156,9 @@ int main(void) {
 	}
 
 	dump_game_state();
+
+
+	// Start appropriate music
     
 	if (global_state.game_state == IN_GAME) {
 		play_ingame_music();
@@ -1820,16 +1168,23 @@ int main(void) {
 	
 	debugf_uart("Music playing OK\n");
 	
-	// Reset IRQ handler
+	
+	// Setup reset IRQ handler to keep track of selected console on reset
+
 	register_RESET_handler(reset_interrupt_callback);
 	
 	debugf_uart("NMI handler register OK\n");
 
+
+	// Start gameplay
+
 	update();
 	
 	debugf_uart("First update OK\n");
-	
 	debugf_uart("Entering main loop\n");
+
+
+	// Main loop
 
 	while (true) {
 		frameIdx = (frameIdx + 1) % FB_COUNT;
@@ -1864,10 +1219,16 @@ int main(void) {
 			}
 		}
 #endif
+
+		// Game loop
+		
 		if (!paused && !in_reset) {
 			update();
 			dump_game_state();
 		}
+
+
+		// Render
 
 		render_offscreen();
 

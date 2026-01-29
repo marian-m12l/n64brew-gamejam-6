@@ -3,21 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <libdragon.h>
-
 #include "persistence.h"
-
 #include "pc64.h"
-
-static void debugf_uart(char* format, ...) {
-#ifdef DEBUG_MODE
-	va_list args;
-	va_start(args, format);
-	vsnprintf(write_buf, sizeof(write_buf), format, args);
-	va_end(args);
-	pc64_uart_write((const uint8_t *)write_buf, strlen(write_buf));
-	debugf(write_buf);
-#endif	
-}
 
 
 #define CHUNK_SIZE 64
@@ -75,6 +62,8 @@ static heap_t heaps[TOTAL_HEAPS] = {
 		.len = 1024
 	}
 };
+
+static int last_heap = TOTAL_HEAPS-1;
 
 
 static void* alloc_heap(heap_t* heap, int size, bool cached) {
@@ -152,10 +141,15 @@ static uint16_t calculate_crc16(const uint32_t id, const uint8_t * data, size_t 
 	return crc16(data, len, crc);
 }
 
-void replicate(persistence_level_t level, uint32_t id, void* data, int len, int replicas, bool cached, bool flush, bool useExpansionPak, void** addresses) {
+
+void init_heaps(bool useExpansionPak) {
+	last_heap = useExpansionPak ? TOTAL_HEAPS-1 : TOTAL_HEAPS-3;
+}
+
+void replicate(persistence_level_t level, uint32_t id, void* data, int len, int replicas, bool cached, bool flush, void** addresses) {
 	// FIXME Persistence level should also determine cached / flush behaviour
 	int min_heap = 0;
-	int max_heap = useExpansionPak ? TOTAL_HEAPS-1 : TOTAL_HEAPS-3;
+	int max_heap = last_heap;
 	switch (level) {
 		case HIGHEST:
 			break;

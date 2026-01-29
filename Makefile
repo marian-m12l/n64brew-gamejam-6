@@ -4,7 +4,7 @@ N64_ROM_HEADER=ipl3_prod_patched.z64
 include $(N64_INST)/include/n64.mk
 include $(T3D_INST)/t3d.mk
 
-src = main.c persistence.c logo.c entrypoint.S
+src = main.c pc64.c game_state.c gfx.c persistence.c logo.c entrypoint.S
 
 #N64_CFLAGS = -Wno-error
 N64_CFLAGS := -g -DDEBUG_MODE=1 #-DNO_EXPANSION_PAK=1
