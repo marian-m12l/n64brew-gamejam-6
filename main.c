@@ -10,6 +10,7 @@
 #include "gfx.h"
 #include "logo.h"
 #include "persistence.h"
+#include "recovery.h"
 #include "pc64.h"
 
 
@@ -76,24 +77,8 @@ static bool paused = false;
 static bool in_reset = false;
 
 
-static global_state_t restored_global_state;
-static int restored_global_state_count;
-static int restored_global_state_counts;
-
-static console_t restored_consoles[MAX_CONSOLES];
-static int restored_consoles_count;
-static int restored_consoles_counts[MAX_CONSOLES];
-
-static attacker_t restored_attackers[MAX_CONSOLES];
-static int restored_attackers_count;
-static int restored_attackers_counts[MAX_CONSOLES];
-static int restored_attackers_ignored;
-
-static overheat_t restored_overheat[MAX_CONSOLES];
-static int restored_overheat_count;
-static int restored_overheat_counts[MAX_CONSOLES];
-static int restored_overheat_ignored;
-
+// These variables keep their value during a reset, so we can measure reset time and
+// apply gameplay to the console the player was plugged into when the reset button was hit
 
 static volatile int reset_console __attribute__((section(".persistent")));
 static volatile uint32_t reset_ticks __attribute__((section(".persistent")));
@@ -847,46 +832,10 @@ int main(void) {
 
 	// Try to restore game data after a warm or cold boot
 
+	bool restored_something = false;
 	if (!forceColdBoot) {
-		// Restore game data from heap replicas
-		restored_global_state_count = restore(&restored_global_state, &restored_global_state_counts, GLOBAL_STATE_PAYLOAD_SIZE, sizeof(global_state_t), 1, GLOBAL_STATE_MAGIC, GLOBAL_STATE_MASK);
-		restored_consoles_count = restore(restored_consoles, restored_consoles_counts, CONSOLE_PAYLOAD_SIZE, sizeof(console_t), MAX_CONSOLES, CONSOLE_MAGIC, CONSOLE_MASK);
-		restored_attackers_count = restore(restored_attackers, restored_attackers_counts, ATTACKER_PAYLOAD_SIZE, sizeof(attacker_t), MAX_CONSOLES, ATTACKER_MAGIC, ATTACKER_MASK);
-		restored_overheat_count = restore(restored_overheat, restored_overheat_counts, OVERHEAT_PAYLOAD_SIZE, sizeof(overheat_t), MAX_CONSOLES, OVERHEAT_MAGIC, OVERHEAT_MASK);
-
-#ifdef DEBUG_MODE
-		if (restored_global_state_count > 0) {
-			debugf_uart("global_state: %d/%d\n", restored_global_state_counts, GLOBAL_STATE_REPLICAS);
-		}
-		if (restored_consoles_count > 0) {
-			debugf_uart("consoles: ");
-			for (int i=0; i<restored_consoles_count; i++) {
-				uint32_t id = restored_consoles[i].id;
-				debugf_uart("%d/%d ", restored_consoles_counts[id], CONSOLE_REPLICAS);
-			}
-			debugf_uart("\n");
-		}
-		if (restored_attackers_count > 0) {
-			debugf_uart("attackers: ");
-			for (int i=0; i<restored_attackers_count; i++) {
-				uint32_t id = restored_attackers[i].id;
-				debugf_uart("%d of %d/%d ", restored_attackers_counts[id], restored_attackers[i].min_replicas, ATTACKER_REPLICAS);
-			}
-			debugf_uart("\n");
-		}
-		if (restored_overheat_count > 0) {
-			debugf_uart("overheat: ");
-			for (int i=0; i<restored_overheat_count; i++) {
-				uint32_t id = restored_overheat[i].id;
-				debugf_uart("%d of %d/%d", restored_overheat_counts[id], restored_overheat[i].min_replicas, OVERHEAT_REPLICAS);
-			}
-			debugf_uart("\n");
-		}
-
-		// TODO Dump heaps over uart ?
-#endif
-
-		debugf_uart("Restoration OK\n");
+		restored_something = try_recover();
+		debugf_uart("Restoration done\n");
 	}
 
 
@@ -895,33 +844,6 @@ int main(void) {
 	debugf_uart("Clearing heaps\n");
 	clear_heaps();
 	debugf_uart("Heaps cleared\n");
-
-
-	// Check validity of restored data
-
-	bool restored_something = (restored_global_state_count + restored_consoles_count + restored_attackers_count + restored_overheat_count) > 0;
-	bool restored_ok = false;
-	if (restored_global_state_count == 1) {
-		debugf_uart("Entering followup boot sequence\n");
-
-		debugf_uart("restored: %d global state / %d consoles / %d attackers / %d overheat\n", restored_global_state_count, restored_consoles_count, restored_attackers_count, restored_overheat_count);
-
-		global_state = restored_global_state;
-		debugf_uart("Restored level %d\n", global_state.current_level);
-		bool broken_level = false;
-		if (global_state.game_state == IN_GAME && global_state.current_level >= 0 && global_state.current_level < TOTAL_LEVELS) {
-			const level_t* level = &levels[global_state.current_level];
-			if (restored_consoles_count != level->consoles_count) {
-				debugf_uart("FAILED TO RESTORE ALL CONSOLES !!! %d != %d\n", restored_consoles_count, level->consoles_count);
-				// TODO Should show game over ?
-				//debugf_uart("BROKEN: fallback to initial boot sequence\n");
-				broken_level = true;
-			}
-		}
-
-		// Game Over if broken level
-		restored_ok = !broken_level;
-	}
 
 
 	// If initializing game from scratch, display logos
@@ -1002,7 +924,12 @@ int main(void) {
 	// Initialize game state from scratch or from restored data
 	
 	if (restored_something) {
-		if (restored_ok) {
+		debugf_uart("Entering followup boot sequence\n");
+		debugf_uart("restored: %d global state / %d consoles / %d attackers / %d overheat\n", restored_global_state_count, restored_consoles_count, restored_attackers_count, restored_overheat_count);
+		
+		// Check validity of restored data: game over if broken level
+		if (validate_recovered()) {
+    		global_state = restored_global_state;
 			replicate_global_state();
 
 			debugf_uart("game_state: %d\n", global_state.game_state);
@@ -1221,7 +1148,7 @@ int main(void) {
 #endif
 
 		// Game loop
-		
+
 		if (!paused && !in_reset) {
 			update();
 			dump_game_state();
