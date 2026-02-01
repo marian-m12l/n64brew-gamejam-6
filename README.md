@@ -11,6 +11,8 @@ It has been tested on a PAL N64 console and with ares v147 (although ares does n
 
 I have only tested the game on hardware with a Picocart64 flashcart which has no menu and runs the ROM directly. For other flashcart, it probably won't work if it does not support booting directly to the ROM itself.
 
+Expansion Pak is not strictly required, but recommended for a better "decay" experience.
+
 (Tip: you can hold R+A during power off to drop the ongoing game and start afresh)
 
 
@@ -56,9 +58,11 @@ N64, Saturn, PS logos: trademarked by their respective owners, used here under "
 
 # Memory layout
 
-TODO 0xa0000000 static data + bss
-TODO 0xa0101000 custom heaps in internal memory (4k offset to avoid probing write in ipl3)
-TODO 0xa0300000 malloc heap
-TODO 0xa03f0000 [stack in internal memory]
-TODO 0xa0401000 custom heaps in expansion pak
-TODO 0xa07f0000 [stack in expansion pak]
+| Address range | Data |
+| ------------- | ---- |
+| 0xa0000000-0xa01fffff | static data + bss |
+| 0xa0101000-0xa02fffff | custom heaps in internal memory (4k offset to avoid probing write in ipl3) |
+| 0xa0300000-0xa03effff | malloc heap |
+| 0xa03f0000-0xa03fffff | [stack in internal memory - when no expansion pak] |
+| 0xa0401000-0xa07effff | custom heaps in expansion pak |
+| 0xa07f0000-0xa07fffff | [stack in expansion pak] |
