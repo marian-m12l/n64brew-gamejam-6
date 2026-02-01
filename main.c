@@ -1150,9 +1150,6 @@ int main(void) {
 
 	// Start gameplay
 
-	update();
-	
-	debugf_uart("First update OK\n");
 	debugf_uart("Entering main loop\n");
 
 
