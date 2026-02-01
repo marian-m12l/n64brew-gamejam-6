@@ -16,6 +16,9 @@ Expansion Pak is not strictly required, but recommended for a better "decay" exp
 (Tip: you can hold R+A during power off to drop the ongoing game and start afresh)
 
 
+[![Gameplay Video](http://img.youtube.com/vi/CXkxY25Z66U/0.jpg)](http://www.youtube.com/watch?v=CXkxY25Z66U "Console Clash - N64brew Game Jam #6 entry")
+
+
 # Build instructions
 
 To build this ROM, you need to set up libdragon using the `preview` branch and Tiny3D. Make sure the `N64_INST` and `T3D_INST` are exported, then run:
