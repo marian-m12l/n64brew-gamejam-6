@@ -114,6 +114,8 @@ void reset_global_state () {
 	memset(&global_state.level_reset_count_per_console, 0, sizeof(global_state.level_reset_count_per_console));
 	global_state.level_power_cycle_count = 0;
 	global_state.level_timer = 0;
+	global_state.games_count++;
+	global_state.practice = false;
 	update_global_state();
 }
 
@@ -149,6 +151,11 @@ void inc_level_power_cycle_count() {
 
 void set_level_timer(float t) {
 	global_state.level_timer = t;
+	update_global_state();
+}
+
+void set_practice(bool p) {
+	global_state.practice = p;
 	update_global_state();
 }
 

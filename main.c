@@ -267,6 +267,14 @@ void update() {
 					//play_menu_music();
 					wav64_play(&sfx_blip, SFX_CHANNEL);
 				}
+				if (global_state.games_count > 0 && pressed.z) {
+					reset_level_global_state(5);
+					load_level(5);
+					play_ingame_music();
+					set_game_state(IN_GAME);
+					set_practice(true);
+					wav64_play(&sfx_blip, SFX_CHANNEL);
+				}
 			}
 			break;
 		}
@@ -385,10 +393,18 @@ void update() {
 					cleared = true;
 				}
 #endif
+
+				if (global_state.practice && pressed.z) {
+					set_game_state(INTRO);
+					clear_level();
+					reset_global_state();
+					play_menu_music();
+					wav64_play(&sfx_blip, SFX_CHANNEL);
+				}
 			}
 
 			// Handle end condition and change level
-			if (cleared) {
+			if (!global_state.practice && cleared) {
 				set_game_state(NEXT_LEVEL);
 				// TODO Keep level displayed for a few seconds, clear when loading the next level
 				clear_level();
@@ -619,6 +635,9 @@ void render_2d() {
 			if (current_joypad != 0) {
 				rdpq_text_printf(&descparms, FONT_BUILTIN_DEBUG_MONO, 20, 110, "Please make sure to plug a single controller to the first port");
 			}
+			if (global_state.games_count > 0) {
+				rdpq_text_printf(&descparms, FONT_BUILTIN_DEBUG_MONO, 20, 130, "Press Z to practice");
+			}
 			break;
 		case IN_GAME: {
 			const level_t* level = &levels[global_state.current_level];
@@ -676,11 +695,31 @@ void render_2d() {
 					}
 				}
 
+				if (global_state.practice) {
+					// Attacker decay
+					draw_gauge(x-10, y+25, 6, 1, 0, 1, restored_attackers_counts[i], ATTACKER_REPLICAS,
+						restored_attackers_counts[i] >= restored_attackers_minimas[i] ? RGBA32(0x00, 0xff , 0, 0xff) : RGBA32(0xff, 0 , 0, 0xff),
+						RGBA32(0, 0, 0, 0xc0)
+					);
+					rdpq_set_prim_color(RGBA32(0xff, 0xff, 0xff, 0xff));
+					rdpq_fill_rectangle(x-10+1+restored_attackers_minimas[i], y+25, x-10+1+restored_attackers_minimas[i]+1, y+31);
+					// Overheat decay
+					draw_gauge(x-10, y+45, 6, 1, 0, 1, restored_overheat_counts[i], OVERHEAT_REPLICAS,
+						restored_overheat_counts[i] >= restored_overheat_minimas[i] ? RGBA32(0x00, 0xff , 0, 0xff) : RGBA32(0xff, 0 , 0, 0xff),
+						RGBA32(0, 0, 0, 0xc0)
+					);
+					rdpq_set_prim_color(RGBA32(0xff, 0xff, 0xff, 0xff));
+					rdpq_fill_rectangle(x-10+1+restored_overheat_minimas[i], y+45, x-10+1+restored_overheat_minimas[i]+1, y+51);
+
+					rdpq_sync_pipe();
+					rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, x, y+20, "Attacker decay:");
+					rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, x, y+40, "Overheat decay:");
+				}
 #ifdef DEBUG_MODE
 				rdpq_sync_pipe();
-				rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, x, y+20, "%d/%d/%d", restored_attackers_counts[i], attacker->min_replicas, restored_attackers_ignored);
+				rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, x, y+20, "%d/%d/%d", restored_attackers_counts[i], restored_attackers_minimas[i], restored_attackers_ignored);
 				rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, x, y+30, "%d/%f", attacker->level, attacker->last_attack);
-				rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, x, y+40, "%d/%d/%d", restored_overheat_counts[i], overheat->min_replicas, restored_overheat_ignored);
+				rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, x, y+40, "%d/%d/%d", restored_overheat_counts[i], restored_overheat_minimas[i], restored_overheat_ignored);
 				rdpq_text_printf(NULL, FONT_BUILTIN_DEBUG_MONO, x, y+50, "%d/%f", overheat->overheat_level, overheat->last_overheat);
 #endif
 
@@ -722,7 +761,11 @@ void render_2d() {
 
 			// Timer
 			rdpq_sync_pipe();
-        	rdpq_text_printf(&textparms, FONT_HALODEK, 0, 30, "%d", (int) ceilf(global_state.level_timer));
+			if (global_state.practice) {
+				rdpq_text_printf(&textparms, FONT_HALODEK, 0, 30, "PRACTICE");
+			} else {
+        		rdpq_text_printf(&textparms, FONT_HALODEK, 0, 30, "%d", (int) ceilf(global_state.level_timer));
+			}
 			break;
 		}
 		case NEXT_LEVEL: {
@@ -994,7 +1037,7 @@ int main(void) {
 			if (rst == RESET_COLD) {
 				debugf_uart("Cold\n");
 				inc_power_cycle_count();
-				if (global_state.game_state == IN_GAME) {
+				if (global_state.game_state == IN_GAME && !global_state.practice) {
 					inc_level_power_cycle_count();
 					// TODO Handle too many power cycles in level --> game over
 					if (global_state.level_power_cycle_count > levels[global_state.current_level].max_power_cycles) {
@@ -1011,18 +1054,20 @@ int main(void) {
 				debugf_uart("Warm\n");
 				inc_reset_count();
 				if (global_state.game_state == IN_GAME) {
-					inc_level_reset_count_per_console(reset_console);
-					// TODO Handle too many resets in level --> game over? penalty?
-					// TODO Handle too many power cycles in level --> game over
-					if (reset_console != -1 && global_state.level_reset_count_per_console[reset_console] > levels[global_state.current_level].max_resets_per_console) {
-						debugf_uart("Too many resets for console %d in level %d: %d > %d\n", reset_console, global_state.current_level, global_state.level_reset_count_per_console[reset_console], levels[global_state.current_level].max_resets_per_console);
-						// TODO Game Over --> display reason?
-						clear_level();
-						wav64_play(&sfx_gameover, SFX_CHANNEL);
-						play_menu_music();
-						set_game_state(GAME_OVER);
-						set_game_over(TOO_MANY_RESETS);
-					} else {
+					bool gameover = false;
+					if (!global_state.practice) {
+						inc_level_reset_count_per_console(reset_console);
+						if (reset_console != -1 && global_state.level_reset_count_per_console[reset_console] > levels[global_state.current_level].max_resets_per_console) {
+							debugf_uart("Too many resets for console %d in level %d: %d > %d\n", reset_console, global_state.current_level, global_state.level_reset_count_per_console[reset_console], levels[global_state.current_level].max_resets_per_console);
+							clear_level();
+							wav64_play(&sfx_gameover, SFX_CHANNEL);
+							play_menu_music();
+							set_game_state(GAME_OVER);
+							set_game_over(TOO_MANY_RESETS);
+							gameover = true;
+						}
+					}
+					if (!gameover) {
 						for (int i=0; i<consoles_count; i++) {
 							overheat_t* overheat = &console_overheat[i];
 							if (i == reset_console) {
@@ -1141,7 +1186,7 @@ int main(void) {
 #ifdef DEBUG_MODE
 		if (current_joypad != -1) {
 			joypad_buttons_t pressed = joypad_get_buttons_pressed(current_joypad);
-			if (pressed.z) {
+			if (pressed.c_right) {
 				paused = !paused;
 			}
 		}

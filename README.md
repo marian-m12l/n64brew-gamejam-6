@@ -11,6 +11,8 @@ It has been tested on a PAL N64 console and with ares v147 (although ares does n
 
 I have only tested the game on hardware with a Picocart64 flashcart which has no menu and runs the ROM directly. For other flashcart, it probably won't work if it does not support booting directly to the ROM itself.
 
+(Tip: you can hold R+A during power off to drop the ongoing game and start afresh)
+
 
 # Build instructions
 

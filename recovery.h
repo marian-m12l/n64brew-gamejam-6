@@ -14,11 +14,13 @@ extern int restored_consoles_counts[MAX_CONSOLES];
 extern attacker_t restored_attackers[MAX_CONSOLES];
 extern int restored_attackers_count;
 extern int restored_attackers_counts[MAX_CONSOLES];
+extern int restored_attackers_minimas[MAX_CONSOLES];
 extern int restored_attackers_ignored;
 
 extern overheat_t restored_overheat[MAX_CONSOLES];
 extern int restored_overheat_count;
 extern int restored_overheat_counts[MAX_CONSOLES];
+extern int restored_overheat_minimas[MAX_CONSOLES];
 extern int restored_overheat_ignored;
 
 

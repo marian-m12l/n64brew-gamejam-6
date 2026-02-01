@@ -164,6 +164,8 @@ typedef struct {
 	uint8_t level_reset_count_per_console[MAX_CONSOLES];
 	uint8_t level_power_cycle_count;
 	float level_timer;
+	bool games_count;
+	bool practice;
 	// Exclude remaining fields from replication
 	char __exclude;
 	void* replicas[GLOBAL_STATE_REPLICAS];
@@ -204,6 +206,7 @@ void inc_power_cycle_count();
 void inc_level_reset_count_per_console(int idx);
 void inc_level_power_cycle_count();
 void set_level_timer(float t);
+void set_practice(bool p);
 
 
 // Functions for consoles

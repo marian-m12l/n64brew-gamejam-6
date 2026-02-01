@@ -14,11 +14,13 @@ int restored_consoles_counts[MAX_CONSOLES];
 attacker_t restored_attackers[MAX_CONSOLES];
 int restored_attackers_count;
 int restored_attackers_counts[MAX_CONSOLES];
+int restored_attackers_minimas[MAX_CONSOLES];
 int restored_attackers_ignored;
 
 overheat_t restored_overheat[MAX_CONSOLES];
 int restored_overheat_count;
 int restored_overheat_counts[MAX_CONSOLES];
+int restored_overheat_minimas[MAX_CONSOLES];
 int restored_overheat_ignored;
 
 
@@ -28,6 +30,18 @@ bool try_recover() {
     restored_consoles_count = restore(restored_consoles, restored_consoles_counts, CONSOLE_PAYLOAD_SIZE, sizeof(console_t), MAX_CONSOLES, CONSOLE_MAGIC, CONSOLE_MASK);
     restored_attackers_count = restore(restored_attackers, restored_attackers_counts, ATTACKER_PAYLOAD_SIZE, sizeof(attacker_t), MAX_CONSOLES, ATTACKER_MAGIC, ATTACKER_MASK);
     restored_overheat_count = restore(restored_overheat, restored_overheat_counts, OVERHEAT_PAYLOAD_SIZE, sizeof(overheat_t), MAX_CONSOLES, OVERHEAT_MAGIC, OVERHEAT_MASK);
+
+    // Ignore cached duplicates for attackers and overheat
+    for (int i=0; i<restored_attackers_count; i++) {
+        uint32_t id = restored_attackers[i].id;
+        restored_attackers_counts[id] /= 2;
+        restored_attackers_minimas[id] = restored_attackers[i].min_replicas;
+    }
+    for (int i=0; i<restored_overheat_count; i++) {
+        uint32_t id = restored_overheat[i].id;
+        restored_overheat_counts[id] /= 2;
+        restored_overheat_minimas[id] = restored_overheat[i].min_replicas;
+    }    
 
 #ifdef DEBUG_MODE
     if (restored_global_state_count > 0) {

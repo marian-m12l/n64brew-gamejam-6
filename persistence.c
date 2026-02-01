@@ -219,7 +219,7 @@ void update_replicas(void** addresses, void* data, int len, int replicas, bool f
 			debugf_uart("Update failed\n");
 		}
 		// Optionally flush cache to RDRAM
-		if (((uintptr_t) ptr & 0x80000000) == 0x80000000 && flush) {
+		if (((uintptr_t) ptr & 0xa0000000) == 0x80000000 && flush) {
 			data_cache_hit_writeback(ptr, stored_len);
 			inst_cache_hit_invalidate(ptr, stored_len);
 		}
@@ -232,7 +232,7 @@ void erase_and_free_replicas(void** addresses, int replicas) {
 		if (ptr != NULL) {
 			memset(ptr, 0, CHUNK_SIZE);
 			// Flush cache to RDRAM
-			if (((uintptr_t) ptr & 0x80000000) == 0x80000000) {
+			if (((uintptr_t) ptr & 0xa0000000) == 0x80000000) {
 				data_cache_hit_writeback(ptr, CHUNK_SIZE);
 				inst_cache_hit_invalidate(ptr, CHUNK_SIZE);
 				memset((ptr + 0x20000000), 0, CHUNK_SIZE);
