@@ -306,7 +306,7 @@ void update() {
 					wav64_play(&sfx_whoosh, SFX_CHANNEL);
 					increase_overheat(i);
 					// Game over if reached level 4
-					if (console_overheat[i].overheat_level > 3) {
+					if (overheat->overheat_level > 3) {
 						debugf_uart("OVERHEAT GAME OVER %d\n", i);
 						clear_level();
 						wav64_play(&sfx_gameover, SFX_CHANNEL);
@@ -636,7 +636,7 @@ void render_2d() {
 				rdpq_text_printf(&descparms, FONT_BUILTIN_DEBUG_MONO, 20, 110, "Please make sure to plug a single controller to the first port");
 			}
 			if (global_state.games_count > 0) {
-				rdpq_text_printf(&descparms, FONT_BUILTIN_DEBUG_MONO, 20, 130, "Press Z to practice");
+				rdpq_text_printf(&descparms, FONT_BUILTIN_DEBUG_MONO, 20, 150, "Press Z to practice");
 			}
 			break;
 		case IN_GAME: {
@@ -735,7 +735,7 @@ void render_2d() {
 				});
 				bool overheating = attacker->spawned && attacker->level == QUEUE_LENGTH;
 				draw_gauge(x + 26, 225, 6, 5, 0, 1, overheat->overheat_level, 3,
-					RGBA32(0xff, 0xc0 - 0x60 * (overheat->overheat_level - 1), 0, 0xff),
+					overheat->overheat_level > 0 ? RGBA32(0xff, 0xc0 - 0x60 * (overheat->overheat_level - 1), 0, 0xff) : RGBA32(0, 0, 0, 0xff),
 					overheating ? RGBA32((int) fabs((fmodf((overheat->last_overheat - global_state.level_timer) * (overheat->overheat_level + 1), 2.0f) - 1) * 0xff), 0, 0, 0xff) : RGBA32(0, 0, 0, 0xc0)
 				);
 				if (level->max_resets_per_console > 0) {
@@ -1087,8 +1087,8 @@ int main(void) {
 									attacker_t* attacker = &console_attackers[i];
 									bool overheating = attacker->spawned && attacker->level == QUEUE_LENGTH;
 									if (overheating) {
-										debugf_uart("REPLAY OVERHEAT on console #%d: add %f ms\n", i, replay_ms);
-										overheat->last_overheat += replay_ms;
+										debugf_uart("REPLAY OVERHEAT on console #%d: add %f s to overheat->last_overheat=%f\n", i, replay_ms / 1000.0f, overheat->last_overheat);
+										overheat->last_overheat += replay_ms / 1000.0f;
 									} else {
 										// Lower attack rate
 										float factor = 0.5f;

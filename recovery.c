@@ -26,20 +26,18 @@ int restored_overheat_ignored;
 
 bool try_recover() {
     // Restore game data from heap replicas
-    restored_global_state_count = restore(&restored_global_state, &restored_global_state_counts, GLOBAL_STATE_PAYLOAD_SIZE, sizeof(global_state_t), 1, GLOBAL_STATE_MAGIC, GLOBAL_STATE_MASK);
-    restored_consoles_count = restore(restored_consoles, restored_consoles_counts, CONSOLE_PAYLOAD_SIZE, sizeof(console_t), MAX_CONSOLES, CONSOLE_MAGIC, CONSOLE_MASK);
-    restored_attackers_count = restore(restored_attackers, restored_attackers_counts, ATTACKER_PAYLOAD_SIZE, sizeof(attacker_t), MAX_CONSOLES, ATTACKER_MAGIC, ATTACKER_MASK);
-    restored_overheat_count = restore(restored_overheat, restored_overheat_counts, OVERHEAT_PAYLOAD_SIZE, sizeof(overheat_t), MAX_CONSOLES, OVERHEAT_MAGIC, OVERHEAT_MASK);
+    restored_global_state_count = restore(&restored_global_state, &restored_global_state_counts, GLOBAL_STATE_PAYLOAD_SIZE, sizeof(global_state_t), 1, GLOBAL_STATE_MAGIC, GLOBAL_STATE_MASK, false);
+    restored_consoles_count = restore(restored_consoles, restored_consoles_counts, CONSOLE_PAYLOAD_SIZE, sizeof(console_t), MAX_CONSOLES, CONSOLE_MAGIC, CONSOLE_MASK, false);
+    restored_attackers_count = restore(restored_attackers, restored_attackers_counts, ATTACKER_PAYLOAD_SIZE, sizeof(attacker_t), MAX_CONSOLES, ATTACKER_MAGIC, ATTACKER_MASK, true);
+    restored_overheat_count = restore(restored_overheat, restored_overheat_counts, OVERHEAT_PAYLOAD_SIZE, sizeof(overheat_t), MAX_CONSOLES, OVERHEAT_MAGIC, OVERHEAT_MASK, true);
 
-    // Ignore cached duplicates for attackers and overheat
+    // Keep track of required replicas
     for (int i=0; i<restored_attackers_count; i++) {
         uint32_t id = restored_attackers[i].id;
-        restored_attackers_counts[id] /= 2;
         restored_attackers_minimas[id] = restored_attackers[i].min_replicas;
     }
     for (int i=0; i<restored_overheat_count; i++) {
         uint32_t id = restored_overheat[i].id;
-        restored_overheat_counts[id] /= 2;
         restored_overheat_minimas[id] = restored_overheat[i].min_replicas;
     }    
 

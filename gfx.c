@@ -150,6 +150,8 @@ static void simulate_particles_smoke(particles_t* particles, int heat_level, flo
 }
 
 void drawsmoke(particles_t* particles, T3DVec3 position, float console_scale, int frameIdx, float frametime, int heat_level, sprite_t* spr_swirl) {
+  assert(particles->buffer != NULL);
+
 	particles->tpx_time += frametime * 1.0f;
 	particles->timeTile += frametime * 25.1f;
 	particles->particleCount = 24 * heat_level;

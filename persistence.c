@@ -267,7 +267,7 @@ bool contains_id(uint32_t* ids, int len, uint32_t id) {
     return false;
 }
 
-int restore(void* dest, int* counts, int len, int stride, int max, uint32_t magic, uint32_t mask) {
+int restore(void* dest, int* counts, int len, int stride, int max, uint32_t magic, uint32_t mask, bool count_uncached_only) {
 	// Restore from ALL HEAPS
     int restored = 0;
     uint32_t* ids = malloc(max * sizeof(uint32_t));
@@ -284,7 +284,9 @@ int restore(void* dest, int* counts, int len, int stride, int max, uint32_t magi
 					// FIXME heap->allocated[i] = true;
 					uint32_t index = *((uint32_t*) (ptr+sizeof(uint32_t)));
 					assert(index < max);
-					counts[index]++;
+					if (!count_uncached_only) {
+						counts[index]++;
+					}
 					if (!found) {
 						//debugf_uart("<<< restored object with id 0x%08x @ %p\n", id, ptr);
 						memcpy(dest+restored*stride, ptr+sizeof(uint32_t), len);

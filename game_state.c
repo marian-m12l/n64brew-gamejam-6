@@ -7,7 +7,7 @@
 const level_t levels[TOTAL_LEVELS] = {
 	// cons.	att/s	att.grace	%att	%heat	%hipersist	rst/c	longrst		power	timer	desc
 	{ 1,		1.5f,	0.8f,		0,		0,		0,			0,		false,		0,		20,		"Your competitors are after you!\n\nPress and hold buttons to defend against attacks, don't let them overheat your console!" },
-	{ 2,		0.7f,	1.5f,		0,		0,		0,			0,		false,		0,		30,		"To defend multiple consoles, plug your controller into the correct slot.\n\nBetter get closer!" },
+	{ 2,		0.7f,	1.5f,		0,		0,		0,			0,		false,		0,		30,		"To defend multiple consoles, plug your controller into the corresponding slot.\n\nBetter get closer!" },
 	{ 2,		1.0f,	1.5f,		0,		0,		0,			1,		false,		0,		60,		"You are now allowed to reset each console once to mitigate overheat. Hitting the RESET button will help you cool the console you're plugged into.\n\nTold ya to get closer!" },
 	{ 3,		0.7f,	1.5f,		0.1f,	0,		0,			1,		true,		0,		60,		"Up next: long reset (holding 5 seconds) can cool your consoles even more.\n\nBeware: attacks will keep coming at your consoles!" },
 	{ 3,		0.7f,	1.5f,		0.9f,	0.9f,	0,			0,		false,		1,		60,		"One last trick in your bag: if things go out of hand, go hit that big POWER switch! Keep the console off for a few seconds, let your enemies feel the slow decay of that dear RDRAM!\n\nBut remember: don't let the memory decay to the point where you'll lose your consoles..." },
