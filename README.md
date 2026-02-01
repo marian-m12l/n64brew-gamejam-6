@@ -19,7 +19,7 @@ To build this ROM, you need to set up libdragon using the `preview` branch and T
 make
 ```
 
-This ROM uses a modified libdragon IPL3 to disable clearing RDRAM and reinitializing the tick counter (see `libdragon.patch`). There's no need to execute the patch on libdragon, as the repo contains the patched ipl3 binary and `entrypoint.S`.
+This ROM uses a modified libdragon IPL3 to disable clearing RDRAM and reinitializing the tick counter (see `libdragon.patch`). The repo contains the patched (and signed) ipl3 binary and `entrypoint.S`, so you only need to apply the patch for `joybus.c` which increases the controller detection rate (this is not necessary for the game, juste a nice-to-have).
 
 
 # Assets attributions
@@ -50,3 +50,13 @@ Controller buttons, checkered background: [from the N64brew-GameJam2024](https:/
 Smoke: [from Tiny3D examples](https://github.com/HailToDodongo/tiny3d)
 
 N64, Saturn, PS logos: trademarked by their respective owners, used here under "fair use" rules (probably)
+
+
+# Memory layout
+
+TODO 0xa0000000 static data + bss
+TODO 0xa0101000 custom heaps in internal memory (4k offset to avoid probing write in ipl3)
+TODO 0xa0300000 malloc heap
+TODO 0xa03f0000 [stack in internal memory]
+TODO 0xa0401000 custom heaps in expansion pak
+TODO 0xa07f0000 [stack in expansion pak]

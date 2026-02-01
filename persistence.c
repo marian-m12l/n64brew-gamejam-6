@@ -16,7 +16,7 @@
 typedef struct {
 	uint8_t (*heap)[CHUNK_SIZE];
 	uint8_t (*cache)[CHUNK_SIZE];
-	bool allocated[EXPANSION_CHUNKS_COUNT];
+	bool allocated[1024];
 	uint16_t len;
 	uint16_t used;
 } heap_t;
@@ -68,12 +68,14 @@ static int last_heap = TOTAL_HEAPS-1;
 
 static void* alloc_heap(heap_t* heap, int size, bool cached) {
 	assert(size <= CHUNK_SIZE);
+	assert(heap->used < heap->len);
 	int i=0;
 	while(heap->allocated[(i*STEP)%heap->len] && i < heap->len) {
 		i++;
 	}
-	i = (i * STEP) % heap->len;
 	assert(i < heap->len);	// Fail if no slot available
+	i = (i * STEP) % heap->len;
+	assert(!heap->allocated[i]);
 	heap->allocated[i] = true;
 	heap->used++;
 	return cached ? &(heap->cache[i]) : &(heap->heap[i]);
@@ -85,6 +87,7 @@ static void free_heap(heap_t* heap, void* ptr) {
 		i = (ptr - (void*)heap->cache) / CHUNK_SIZE;
 	}
 	assert (i < heap->len);	// Fail if no valid slot
+	assert(heap->allocated[i]);
 	heap->allocated[i] = false;
 	heap->used--;
 }

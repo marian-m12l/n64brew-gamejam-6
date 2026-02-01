@@ -49,3 +49,16 @@ index 04ca89a41..973a27b63 100644
  #if 0
  	/* Run a check to verify that BSS is cleared. This is useful while debugging
  	   IPL3 changes. */
+diff --git a/src/joybus/joybus.c b/src/joybus/joybus.c
+index 94eaf59a5..b1eb736b7 100644
+--- a/src/joybus/joybus.c
++++ b/src/joybus/joybus.c
+@@ -97,7 +97,7 @@ static timer_link_t *identify_timer = NULL;
+  * the connected devices to check if the identifier has changed or if any
+  * accessories have been connected/disconnected.
+  */
+-#define JOYBUS_IDENTIFY_INTERVAL_TICKS      (1 * TICKS_PER_SECOND)
++#define JOYBUS_IDENTIFY_INTERVAL_TICKS      (TICKS_FROM_MS(20))
+ 
+ /** @brief Detection callback entry */
+ typedef struct {

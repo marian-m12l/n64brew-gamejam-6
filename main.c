@@ -754,7 +754,7 @@ void render_2d() {
 					rdpq_text_printf(&descparms, FONT_BUILTIN_DEBUG_MONO, 20, 110, "Too many power cycles! Only %d in this level!", levels[global_state.current_level].max_power_cycles);
 					break;
 				case PARTIAL_RESTORATION:
-					rdpq_text_printf(&descparms, FONT_BUILTIN_DEBUG_MONO, 20, 110, "Oops! You destroyed your console! Don't push it next time...");
+					rdpq_text_printf(&descparms, FONT_BUILTIN_DEBUG_MONO, 20, 110, "Oops! You lost your console to memory decay... Don't push it next time!");
 					break;
 			}
 			break;
