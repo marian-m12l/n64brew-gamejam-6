@@ -30,6 +30,7 @@ bool try_recover() {
     restored_overheat_count = restore(restored_overheat, restored_overheat_counts, OVERHEAT_PAYLOAD_SIZE, sizeof(overheat_t), MAX_CONSOLES, OVERHEAT_MAGIC, OVERHEAT_MASK);
 
 #ifdef DEBUG_MODE
+/*
     if (restored_global_state_count > 0) {
         debugf_uart("global_state: %d/%d\n", restored_global_state_counts, GLOBAL_STATE_REPLICAS);
     }
@@ -57,7 +58,7 @@ bool try_recover() {
         }
         debugf_uart("\n");
     }
-
+*/
     // TODO Dump heaps over uart ?
 #endif
 	

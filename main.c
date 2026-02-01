@@ -765,7 +765,7 @@ void render_2d() {
 
 // Game setup, data restoration and main loop
 
-int main(void) {
+int NOT_main(void) {
 
 	// Measure reset time as soon as possible (for warm boot)
 
@@ -1174,4 +1174,112 @@ int main(void) {
 	// TODO cf. pifhang ??
 	
 	return 0;
+}
+
+
+
+void main() {
+	debug_init_isviewer();
+	debug_init_usblog();
+
+	display_init(RESOLUTION_320x240, DEPTH_32_BPP, 2, GAMMA_NONE, ANTIALIAS_RESAMPLE);
+	console_init();
+
+	printf("Heap Persistence Test\n\n");
+
+	bool useExpansionPak;
+#ifndef NO_EXPANSION_PAK
+	useExpansionPak = is_memory_expanded();
+#endif
+	printf("Expansion Pak: %d\n", useExpansionPak);
+	init_heaps(useExpansionPak);
+	
+	// TODO Memory retention test with actual data structures and crc16
+	// TODO Measure restored data and dump stats
+	// TODO Store data structures at various places in RDRAM (flush cache ?)
+	int heaps_count = useExpansionPak ? 22 : 4;
+	int slots_count = heaps_count * 1024;
+	// TODO Use gameplay constants (*_REPLICAS) depending on the struct type ?
+	// TODO Test more heaps !!
+	int count_per_struct = slots_count / 4;
+	printf("heaps_count=%d slots_count=%d count_per_struct=%d per_heap_per_struct=%d\n", heaps_count, slots_count, count_per_struct, count_per_struct / heaps_count);
+	printf("data size: %d\n", sizeof(uint32_t) + GLOBAL_STATE_PAYLOAD_SIZE + sizeof(uint16_t));
+	printf("data size: %d\n", sizeof(uint32_t) + CONSOLE_PAYLOAD_SIZE + sizeof(uint16_t));
+	printf("data size: %d\n", sizeof(uint32_t) + ATTACKER_PAYLOAD_SIZE + sizeof(uint16_t));
+	printf("data size: %d\n", sizeof(uint32_t) + OVERHEAT_PAYLOAD_SIZE + sizeof(uint16_t));
+
+	global_state_t gs = {
+		.id = 0,
+		.game_state = IN_GAME,
+		.game_over = OVERHEATED,
+		.current_level = 3,
+		.reset_count = 23,
+		.power_cycle_count = 6,
+		.level_reset_count_per_console = { 1, 1, 2, 1 },
+		.level_power_cycle_count = 1,
+		.level_timer = 54.482
+	};
+	console_t c = {
+		.id = 2,
+		.scale = (T3DVec3){{ 1.0f, 2.0f, 3.0f }},
+		.rotation = (T3DVec3){{0, T3D_DEG_TO_RAD(-10.0f), 0}},
+		.position = (T3DVec3){{-40.0f, 0, -25.0f}}
+	};
+	attacker_t a = {
+		.id = 3,
+		.spawned = true,
+		.rival_type = SATURN,
+		.queue = {
+			.buttons = { BTN_A, BTN_B, BTN_C_DOWN, BTN_A },
+			.start = 0,
+			.end = 3
+		},
+		.level = 3,
+		.last_attack = 56.123,
+		.min_replicas = 65
+	};
+	overheat_t o = {
+		.id = 1,
+		.overheat_level = 2,
+		.last_overheat = 57.650,
+		.min_replicas = 42
+	};
+	void** replicas = malloc_uncached(sizeof(void*) * count_per_struct);
+
+	// TODO Try restoring and dump stats
+	printf("Recovering\n");
+	// FIXME recover ALL INSTANCES, EVEN WITH SAME ID !
+	bool restored_something = try_recover();
+	printf("restored: %d / %d global state / %d consoles / %d attackers / %d overheat\n", restored_something, restored_global_state_count, restored_consoles_count, restored_attackers_count, restored_overheat_count);
+	printf("restored: %d / %d global state / %d consoles / %d attackers / %d overheat\n", restored_something, restored_global_state_counts, restored_consoles_counts[c.id], restored_attackers_counts[a.id], restored_overheat_counts[o.id]);
+	//debugf_uart("r,g,c,a,o\n");
+	// FIXME Need count PER HEAP !!
+	//debugf_uart("%d,%d,%d,%d,%d\n", restored_something, restored_global_state_counts, restored_consoles_counts[c.id], restored_attackers_counts[a.id], restored_overheat_counts[o.id]);
+
+	// FIXME restored counts = CACHED + UNCACHED --> should be twice as much as expected !!
+
+	printf("Clearing\n");
+	clear_heaps();
+
+	printf("Replicating\n");
+	printf("replicating %d instances of each data structure\n", count_per_struct);
+	bool cached = false;
+	replicate(HIGHEST, GLOBAL_STATE_MAGIC, &gs, GLOBAL_STATE_PAYLOAD_SIZE, count_per_struct, cached, cached, replicas);
+	replicate(HIGHEST, CONSOLE_MAGIC | c.id, &c, CONSOLE_PAYLOAD_SIZE, count_per_struct, cached, cached, replicas);
+	replicate(HIGHEST, ATTACKER_MAGIC | a.id, &a, ATTACKER_PAYLOAD_SIZE, count_per_struct, cached, cached, replicas);
+	replicate(HIGHEST, OVERHEAT_MAGIC | o.id, &o, OVERHEAT_PAYLOAD_SIZE, count_per_struct, cached, cached, replicas);
+
+	debugf_uart("<done>\n");
+
+	// TODO Check replicas ?
+	// TODO Update ?
+	heaps_stats(heaps_buf, 40);
+	printf("heap stats: %s\n", heaps_buf);
+
+	printf("Done\n");
+
+	console_render();
+
+	while (true) {
+	}
 }

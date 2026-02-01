@@ -11,7 +11,7 @@
 #define CHUNKS_COUNT (((2048-4)*1024)/CHUNK_SIZE)
 #define EXPANSION_CHUNKS_COUNT (((4096-4-64)*1024)/CHUNK_SIZE)
 #define STEP (31)
-#define TOTAL_HEAPS (6)
+#define TOTAL_HEAPS (22)
 
 typedef struct {
 	uint8_t (*heap)[CHUNK_SIZE];
@@ -28,6 +28,11 @@ static uint8_t cached_heap[CHUNKS_COUNT][CHUNK_SIZE] __attribute__((section(".ca
 static uint8_t cached_expansion_heap[EXPANSION_CHUNKS_COUNT][CHUNK_SIZE] __attribute__((section(".cached_expansion_heap")));
 
 static heap_t heaps[TOTAL_HEAPS] = {
+	{
+		.heap = rdram_heap,
+		.cache = cached_heap,
+		.len = 1024
+	},
 	// Highest to lowest retention
 	{
 		.heap = &rdram_heap[1024],
@@ -36,9 +41,22 @@ static heap_t heaps[TOTAL_HEAPS] = {
 		//.len = (CHUNKS_COUNT-256) & 0xf000	// Make sure heap length works well with our stepping
 	},
 	{
-		.heap = rdram_heap,
-		.cache = cached_heap,
-		.len = 1024
+		.heap = &rdram_heap[2*1024],
+		.cache = &cached_heap[2*1024],
+		.len = 1024	// No need for such a large memory area
+		//.len = (CHUNKS_COUNT-256) & 0xf000	// Make sure heap length works well with our stepping
+	},
+	{
+		.heap = &rdram_heap[4*1024],
+		.cache = &cached_heap[4*1024],
+		.len = 1024	// No need for such a large memory area
+		//.len = (CHUNKS_COUNT-256) & 0xf000	// Make sure heap length works well with our stepping
+	},
+	{
+		.heap = &rdram_heap[8*1024],
+		.cache = &cached_heap[8*1024],
+		.len = 1024	// No need for such a large memory area
+		//.len = (CHUNKS_COUNT-256) & 0xf000	// Make sure heap length works well with our stepping
 	},
 	{
 		.heap = &rdram_heap[1024*16],
@@ -51,15 +69,90 @@ static heap_t heaps[TOTAL_HEAPS] = {
 		.len = 1024
 	},
 	{
+		.heap = &rdram_heap[1024*32],
+		.cache = &cached_heap[1024*32],
+		.len = 1024
+	},
+	{
+		.heap = &rdram_heap[1024*36],
+		.cache = &cached_heap[1024*36],
+		.len = 1024
+	},
+	{
+		.heap = &rdram_heap[1024*40],
+		.cache = &cached_heap[1024*40],
+		.len = 1024
+	},
+	{
+		.heap = &rdram_heap[1024*44],
+		.cache = &cached_heap[1024*44],
+		.len = 1024
+	},
+	{
+		.heap = rdram_expansion_heap,
+		.cache = cached_expansion_heap,
+		.len = 1024
+	},
+	// TODO Test heaps further in RDRAM ?!
+	{
 		.heap = &rdram_expansion_heap[1024],
 		.cache = &cached_expansion_heap[1024],
 		.len = 1024	// No need for such a large memory area
 		//.len = (EXPANSION_CHUNKS_COUNT-1024) & 0xf000	// Make sure heap length works well with our stepping
 	},
 	{
-		.heap = rdram_expansion_heap,
-		.cache = cached_expansion_heap,
-		.len = 1024
+		.heap = &rdram_expansion_heap[2*1024],
+		.cache = &cached_expansion_heap[2*1024],
+		.len = 1024	// No need for such a large memory area
+		//.len = (EXPANSION_CHUNKS_COUNT-1024) & 0xf000	// Make sure heap length works well with our stepping
+	},
+	{
+		.heap = &rdram_expansion_heap[4*1024],
+		.cache = &cached_expansion_heap[4*1024],
+		.len = 1024	// No need for such a large memory area
+		//.len = (EXPANSION_CHUNKS_COUNT-1024) & 0xf000	// Make sure heap length works well with our stepping
+	},
+	{
+		.heap = &rdram_expansion_heap[8*1024],
+		.cache = &cached_expansion_heap[8*1024],
+		.len = 1024	// No need for such a large memory area
+		//.len = (EXPANSION_CHUNKS_COUNT-1024) & 0xf000	// Make sure heap length works well with our stepping
+	},
+	{
+		.heap = &rdram_expansion_heap[16*1024],
+		.cache = &cached_expansion_heap[16*1024],
+		.len = 1024	// No need for such a large memory area
+		//.len = (EXPANSION_CHUNKS_COUNT-1024) & 0xf000	// Make sure heap length works well with our stepping
+	},
+	{
+		.heap = &rdram_expansion_heap[24*1024],
+		.cache = &cached_expansion_heap[24*1024],
+		.len = 1024	// No need for such a large memory area
+		//.len = (EXPANSION_CHUNKS_COUNT-1024) & 0xf000	// Make sure heap length works well with our stepping
+	},
+	{
+		.heap = &rdram_expansion_heap[32*1024],
+		.cache = &cached_expansion_heap[32*1024],
+		.len = 1024	// No need for such a large memory area
+		//.len = (EXPANSION_CHUNKS_COUNT-1024) & 0xf000	// Make sure heap length works well with our stepping
+	},
+	{
+		.heap = &rdram_expansion_heap[36*1024],
+		.cache = &cached_expansion_heap[36*1024],
+		.len = 1024	// No need for such a large memory area
+		//.len = (EXPANSION_CHUNKS_COUNT-1024) & 0xf000	// Make sure heap length works well with our stepping
+	},
+	{
+		.heap = &rdram_expansion_heap[40*1024],
+		.cache = &cached_expansion_heap[40*1024],
+		.len = 1024	// No need for such a large memory area
+		//.len = (EXPANSION_CHUNKS_COUNT-1024) & 0xf000	// Make sure heap length works well with our stepping
+	},
+	{
+		.heap = &rdram_expansion_heap[44*1024],
+		.cache = &cached_expansion_heap[44*1024],
+		.len = 1024	// No need for such a large memory area
+		//.len = (EXPANSION_CHUNKS_COUNT-1024) & 0xf000	// Make sure heap length works well with our stepping
 	}
 };
 
@@ -96,8 +189,11 @@ static void clear_heap(heap_t* heap) {
 	for (int i=0; i < heap->len; i++) {
 		heap->allocated[i] = false;
 	}
+	/* FIXME [unusual] CPU writing to RDRAM address 0x11f970 which is cached (missing cache invalidation?)
+        Cacheline was loaded at CPU PC: 0xffffffff80019eec
+        Current CPU PC: 0xffffffff80019eec*/
 	memset(heap->cache, 0, heap->len * CHUNK_SIZE);
-	memset(heap->heap, 0, heap->len * CHUNK_SIZE);	// FIXME Needed ?
+	//memset(heap->heap, 0, heap->len * CHUNK_SIZE);	// FIXME Needed ?
 	data_cache_hit_writeback(heap->cache, heap->len * CHUNK_SIZE);
 	inst_cache_hit_invalidate(heap->cache, heap->len * CHUNK_SIZE);
 	heap->used = 0;
@@ -166,7 +262,7 @@ void replicate(persistence_level_t level, uint32_t id, void* data, int len, int 
 	int heaps_count = (1 + max_heap - min_heap);
 	int replicas_per_heap = replicas / heaps_count;
 	int replicas_remainder = replicas % heaps_count;
-	debugf_uart("replicate: min=%d max=%d per_heap=%d remainder=%d\n", min_heap, max_heap, replicas_per_heap, replicas_remainder);
+	//debugf_uart("replicate: min=%d max=%d per_heap=%d remainder=%d\n", min_heap, max_heap, replicas_per_heap, replicas_remainder);
 	assert(replicas == replicas_per_heap * heaps_count + replicas_remainder);
 
     int stored_len = sizeof(uint32_t) + len + sizeof(uint16_t);
@@ -179,8 +275,11 @@ void replicate(persistence_level_t level, uint32_t id, void* data, int len, int 
 		dump_heap(heap);
 
 		int rounds = (j == min_heap) ? replicas_per_heap + replicas_remainder : replicas_per_heap;
+		//debugf_uart("%d: used=%d rounds=%d len=%d\n", j, heap->used, rounds, heap->len);
+		assert(heap->used + rounds <= heap->len);	// FIXME Why does it work when heap is full --> heap->allocated should be all true ??!!
 		for (int i=0; i<rounds; i++) {
 			//debugf_uart("alloc_heap(%d, %d, %d);\n", j, stored_len, cached);
+			//debugf_uart("used=%d <= len=%d\n", heap->used, heap->len);
 			void* ptr = alloc_heap(heap, stored_len, cached);
 			memcpy(ptr, &id, sizeof(uint32_t));
 			memcpy(ptr+sizeof(uint32_t), data, len);
@@ -219,6 +318,7 @@ void update_replicas(void** addresses, void* data, int len, int replicas, bool f
 			debugf_uart("Update failed\n");
 		}
 		// Optionally flush cache to RDRAM
+		// FIXME Always true even with 0xa0000000 ??!!
 		if (((uintptr_t) ptr & 0x80000000) == 0x80000000 && flush) {
 			data_cache_hit_writeback(ptr, stored_len);
 			inst_cache_hit_invalidate(ptr, stored_len);
@@ -232,10 +332,11 @@ void erase_and_free_replicas(void** addresses, int replicas) {
 		if (ptr != NULL) {
 			memset(ptr, 0, CHUNK_SIZE);
 			// Flush cache to RDRAM
+			// FIXME Always true even with 0xa0000000 ??!!
 			if (((uintptr_t) ptr & 0x80000000) == 0x80000000) {
 				data_cache_hit_writeback(ptr, CHUNK_SIZE);
 				inst_cache_hit_invalidate(ptr, CHUNK_SIZE);
-				memset((ptr + 0x20000000), 0, CHUNK_SIZE);
+				//memset((ptr + 0x20000000), 0, CHUNK_SIZE);	// FIXME Not needed ?
 			}
 			// Determine heap from ptr
 			bool cleared = false;
@@ -272,6 +373,7 @@ int restore(void* dest, int* counts, int len, int stride, int max, uint32_t magi
     int restored = 0;
     uint32_t* ids = malloc(max * sizeof(uint32_t));
 	for (int j=0; j<TOTAL_HEAPS; j++) {
+		int count_in_heap = 0;
 		heap_t* heap = &heaps[j];
 		for (int i=0; i<heap->len; i++) {
 			// Cached
@@ -285,9 +387,10 @@ int restore(void* dest, int* counts, int len, int stride, int max, uint32_t magi
 					uint32_t index = *((uint32_t*) (ptr+sizeof(uint32_t)));
 					assert(index < max);
 					counts[index]++;
+					count_in_heap++;
 					if (!found) {
 						//debugf_uart("<<< restored object with id 0x%08x @ %p\n", id, ptr);
-						memcpy(dest+restored*stride, ptr+sizeof(uint32_t), len);
+						// FIXME dry-run memcpy(dest+restored*stride, ptr+sizeof(uint32_t), len);
 						ids[restored] = id;
 						restored++;
 						found = true;
@@ -304,9 +407,10 @@ int restore(void* dest, int* counts, int len, int stride, int max, uint32_t magi
 					uint32_t index = *((uint32_t*) (ptr+sizeof(uint32_t)));
 					assert(index < max);
 					counts[index]++;
+					count_in_heap++;
 					if (!found) {
 						//debugf_uart("<<< restored object with id 0x%08x @ %p\n", id, ptr);
-						memcpy(dest+restored*stride, ptr+sizeof(uint32_t), len);
+						// FIXME dry-run memcpy(dest+restored*stride, ptr+sizeof(uint32_t), len);
 						ids[restored] = id;
 						restored++;
 						found = true;
@@ -314,14 +418,15 @@ int restore(void* dest, int* counts, int len, int stride, int max, uint32_t magi
 				}
 			}
 		}
-		debugf_uart("restored replicas with index 0 in heap %d: %d\n", j, counts[0]);
+		//debugf_uart("restored replicas with index 0 in heap %d: %d\n", j, counts[0]);
+		debugf_uart("%d,", count_in_heap);
 	}
     // TODO Need to keep references to valid replicas in the struct itself ?
-	debugf_uart("Found %d instances\n", restored);
+	/*debugf_uart("Found %d instances\n", restored);
 	for (int i=0; i<restored; i++) {
 		debugf_uart("id=0x%08x ", ids[i]);
 	}
-	debugf_uart("\n");
+	debugf_uart("\n");*/
     free(ids);
 	return restored;
 }

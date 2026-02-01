@@ -67,7 +67,7 @@ SECTIONS {
     /* Make sure our extra heaps will fit before stack */
     ASSERT(. <= 0x807f0000, "ERROR: extra heap too large")
 
-    . = 0x80300000;
+    . = 0x80700000;
     __bss_end = .;
 }
 
