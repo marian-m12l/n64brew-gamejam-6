@@ -58,6 +58,10 @@ Smoke: [from Tiny3D examples](https://github.com/HailToDodongo/tiny3d)
 
 N64, Saturn, PS logos: trademarked by their respective owners, used here under "fair use" rules (probably)
 
+## Fonts
+
+Halo Dek: [by Syafrizal a.k.a. Khurasan](https://www.dafont.com/halo-dek.font)
+
 
 # Memory layout
 
